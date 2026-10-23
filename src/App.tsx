@@ -65,8 +65,8 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'zuriglanz-detailing-zh';
 
-// --- BASE LOCATION: 8048 ZÜRICH (ALTSTETTEN) & 30 KM RADIUS ---
-const BASE_COORD_8048 = { lat: 47.3874, lon: 8.4847 };
+// --- BASE LOCATION: ZÜRICH (CITY CENTRE) & 30 KM RADIUS ---
+const BASE_COORD = { lat: 47.3779, lon: 8.5403 };
 const MAX_RADIUS_KM = 30;
 
 // Calculate distance in km between two coordinates (Haversine)
@@ -83,11 +83,8 @@ const calcDistanceKm = (lat1, lon1, lat2, lon2) => {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-// Fallback addresses within 30 km of 8048 Zürich (including ZH, AG, ZG, SZ)
+// Fallback addresses within 30 km of Zürich (including ZH, AG, ZG, SZ)
 const ZURICH_STREETS_DB = [
-  { street: 'Badenerstrasse 690', plz: '8048', city: 'Zürich', distKm: 0.4 },
-  { street: 'Altstetterstrasse 140', plz: '8048', city: 'Zürich', distKm: 0.6 },
-  { street: 'Hohlstrasse 530', plz: '8048', city: 'Zürich', distKm: 0.8 },
   { street: 'Limmattalstrasse 210', plz: '8049', city: 'Zürich', distKm: 2.1 },
   { street: 'Bahnhofstrasse 10', plz: '8001', city: 'Zürich', distKm: 4.5 },
   { street: 'Seestrasse 120', plz: '8002', city: 'Zürich', distKm: 4.9 },
@@ -169,11 +166,11 @@ const ADDONS = [
 // --- TRANSLATIONS (DE / EN ONLY) ---
 const TRANSLATIONS = {
   de: {
-    brandSubtitle: 'Mobile Autoaufbereitung · 8048 Zürich + 30 km Umkreis',
+    brandSubtitle: 'Mobile Autoaufbereitung · Zürich + 30 km Umkreis',
     heroBadge: 'Umweltfreundliche Waterless-Technologie · Vor-Ort-Service',
     heroTitle: 'Schweizer Präzision für Ihr Fahrzeug – direkt bei Ihnen vor Ort.',
     heroDesc:
-      '4–5 Stunden intensive Innen- & Aussenpflege ohne Wasserabfluss (100% Gewässerschutz-konform). Wir kommen zu Ihrem Parkplatz in 8048 Zürich und im Umkreis von 30 km (inkl. ZH, AG, ZG).',
+      '4–5 Stunden intensive Innen- & Aussenpflege ohne Wasserabfluss (100% Gewässerschutz-konform). Wir kommen zu Ihrem Parkplatz in Zürich und im Umkreis von 30 km (inkl. ZH, AG, ZG).',
     bookNowBtn: 'Termin online buchen',
     viewPackagesBtn: 'Preise & Leistungen',
     adminToggle: 'Inhaber-Login',
@@ -186,10 +183,10 @@ const TRANSLATIONS = {
 
     // Pricing Section
     pricingTitle: 'Transparente Pauschale & Zusatzleistungen',
-    pricingSubtitle: 'Keine versteckten Kosten. Anfahrt im Umkreis von 30 km ab 8048 Zürich ist inklusive.',
+    pricingSubtitle: 'Keine versteckten Kosten. Anfahrt im Umkreis von 30 km ab Zürich ist inklusive.',
     basePackageTitle: 'ZüriGlanz Essential Pauschale',
     basePackagePrice: '150 CHF',
-    basePackageTime: 'Dauer: ca. 4–5 Stunden · Inkl. Anfahrt ab 8048 Zürich (30 km Umkreis)',
+    basePackageTime: 'Dauer: ca. 4–5 Stunden · Inkl. Anfahrt ab Zürich (30 km Umkreis)',
     includedInterior: 'Innenraum-Pflege inklusive:',
     intItem1: 'Gründliches Staubsaugen des gesamten Innenraums & Kofferraums',
     intItem2: 'Tiefenreinigung aller Armaturen, Konsolen & Türverkleidungen',
@@ -213,7 +210,7 @@ const TRANSLATIONS = {
     addonPetDesc: 'Spezialbürsten-Reinigung bei starker Verschmutzung oder Hundehaaren.',
 
     // Booking Wizard
-    wizardTitle: 'Termin-Reservierung (8048 Zürich + 30 km Umkreis)',
+    wizardTitle: 'Termin-Reservierung (Zürich + 30 km Umkreis)',
     step1Label: '1. Standort-Check',
     step2Label: '2. Zustand & Umwelt',
     step3Label: '3. Fahrzeug & Paket',
@@ -275,13 +272,13 @@ const TRANSLATIONS = {
     slotAvailable: 'Verfügbar',
 
     // Step 5
-    contactTitle: 'Einsatzort (Umkreis 30 km ab 8048) & Kontaktdaten',
-    addressSearchLabel: 'Adresse suchen (30 km Umkreis ab 8048 Zürich – inkl. ZH, AG, ZG) *',
+    contactTitle: 'Einsatzort (Umkreis 30 km ab Zürich) & Kontaktdaten',
+    addressSearchLabel: 'Adresse suchen (30 km Umkreis ab Zürich – inkl. ZH, AG, ZG) *',
     addressSearchPlaceholder: 'Tippen Sie z.B. Badenerstrasse 690, Wettingen, Zug, Schlieren...',
-    searchingRadiusMsg: 'Suche Adressen im 30 km Umkreis von 8048 Zürich...',
+    searchingRadiusMsg: 'Suche Adressen im 30 km Umkreis von Zürich...',
     streetLabel: 'Strasse & Hausnummer *',
     plzLabel: 'PLZ (4 Ziffern) *',
-    cityLabel: 'Ort (max. 30 km ab 8048 ZH) *',
+    cityLabel: 'Ort (max. 30 km ab Zürich) *',
     nameLabel: 'Vor- & Nachname (ohne Zahlen) *',
     phoneLabel: 'Schweizer Telefon / WhatsApp (+41...) *',
     emailLabel: 'E-Mail-Adresse *',
@@ -296,9 +293,9 @@ const TRANSLATIONS = {
     // Validation Errors
     errCarMake: 'Bitte geben Sie eine gültige Automarke & Modell an (mind. 3 Buchstaben).',
     errStreetNumber: 'Bitte geben Sie Strasse UND Hausnummer an (z.B. Badenerstrasse 690).',
-    errPlzSwiss: 'Bitte eine gültige 4-stellige Schweizer PLZ eingeben (z.B. 8048, 5400, 6300).',
+    errPlzSwiss: 'Bitte eine gültige 4-stellige Schweizer PLZ eingeben (z.B. 8001, 5400, 6300).',
     errOutOfRadius:
-      'Diese Adresse liegt ausserhalb unseres 30 km Service-Radius ab 8048 Zürich. Bitte wählen Sie einen Ort innerhalb von 30 km.',
+      'Diese Adresse liegt ausserhalb unseres 30 km Service-Radius ab Zürich. Bitte wählen Sie einen Ort innerhalb von 30 km.',
     errFullName: 'Bitte Vor- und Nachname eingeben (mind. 2 Wörter, keine Zahlen).',
     errPhoneCh: 'Bitte gültige Schweizer Nummer eingeben (z.B. +41 79 123 45 67).',
     errEmail: 'Bitte eine gültige E-Mail-Adresse eingeben (z.B. name@domain.ch).',
@@ -312,7 +309,7 @@ const TRANSLATIONS = {
     // Admin Dashboard
     adminTitle: 'Inhaber-Cockpit · Buchungsverwaltung',
     adminSub:
-      'Geheime Verwaltungsansicht für ZüriGlanz (Basis 8048 Zürich · 30 km Umkreis). Bestätigen Sie Termine oder kontaktieren Sie Kunden direkt per WhatsApp.',
+      'Geheime Verwaltungsansicht für ZüriGlanz (Basis Zürich · 30 km Umkreis). Bestätigen Sie Termine oder kontaktieren Sie Kunden direkt per WhatsApp.',
     statusPending: 'Wartet auf Bestätigung',
     statusConfirmed: 'Bestätigt',
     statusDeclined: 'Abgelehnt',
@@ -322,11 +319,11 @@ const TRANSLATIONS = {
     noBookings: 'Noch keine Buchungen in dieser Ansicht.'
   },
   en: {
-    brandSubtitle: 'Mobile Car Detailing · 8048 Zürich + 30 km Radius',
+    brandSubtitle: 'Mobile Car Detailing · Zürich + 30 km Radius',
     heroBadge: 'Eco-Friendly Waterless Tech · Doorstep Service',
     heroTitle: 'Swiss Precision Car Care — Right at Your Doorstep.',
     heroDesc:
-      '4–5 hours of dedicated interior & exterior craftsmanship per vehicle. Compliant with Swiss environmental laws. We come directly to your parking spot within a 30 km radius of 8048 Zürich (ZH, AG, ZG).',
+      '4–5 hours of dedicated interior & exterior craftsmanship per vehicle. Compliant with Swiss environmental laws. We come directly to your parking spot within a 30 km radius of Zürich (ZH, AG, ZG).',
     bookNowBtn: 'Book Appointment',
     viewPackagesBtn: 'Pricing & Services',
     adminToggle: 'Owner Login',
@@ -339,10 +336,10 @@ const TRANSLATIONS = {
 
     // Pricing Section
     pricingTitle: 'Transparent Flat Rate & Custom Upgrades',
-    pricingSubtitle: 'No hidden fees. Call-out within a 30 km radius of 8048 Zürich is included.',
+    pricingSubtitle: 'No hidden fees. Call-out within a 30 km radius of Zürich is included.',
     basePackageTitle: 'ZüriGlanz Essential Care (Pauschale)',
     basePackagePrice: '150 CHF',
-    basePackageTime: 'Duration: approx. 4–5 hours · Includes travel within 30 km of 8048 ZH',
+    basePackageTime: 'Duration: approx. 4–5 hours · Includes travel within 30 km of Zürich',
     includedInterior: 'Interior Care Included:',
     intItem1: 'Thorough deep vacuuming of entire cabin, carpets & trunk',
     intItem2: 'Detailed cleaning of all panels, dashboard, vents & consoles',
@@ -429,10 +426,10 @@ const TRANSLATIONS = {
     slotAvailable: 'Available',
 
     // Step 5
-    contactTitle: 'Service Address (30 km Radius from 8048) & Contact',
-    addressSearchLabel: 'Search Address within 30 km of 8048 Zürich (Street, No., PLZ) *',
+    contactTitle: 'Service Address (30 km Radius from Zürich) & Contact',
+    addressSearchLabel: 'Search Address within 30 km of Zürich (Street, No., PLZ) *',
     addressSearchPlaceholder: 'Type e.g. Badenerstrasse 690, Baden, Zug, Küsnacht...',
-    searchingRadiusMsg: 'Searching addresses within 30 km of 8048 Zürich...',
+    searchingRadiusMsg: 'Searching addresses within 30 km of Zürich...',
     streetLabel: 'Street & House Number *',
     plzLabel: 'Postal Code (4 digits) *',
     cityLabel: 'City / Municipality (within 30 km) *',
@@ -450,9 +447,9 @@ const TRANSLATIONS = {
     // Validation Errors
     errCarMake: 'Please enter a valid car make and model (at least 3 letters).',
     errStreetNumber: 'Please include both street name AND house number (e.g. Badenerstrasse 690).',
-    errPlzSwiss: 'Please enter a valid 4-digit Swiss postal code (e.g. 8048, 5400, 6300).',
+    errPlzSwiss: 'Please enter a valid 4-digit Swiss postal code (e.g. 8001, 5400, 6300).',
     errOutOfRadius:
-      'This address is outside our 30 km service radius from 8048 Zürich. Please choose a location within 30 km.',
+      'This address is outside our 30 km service radius from Zürich. Please choose a location within 30 km.',
     errFullName: 'Please enter your first and last name (at least 2 words, no digits).',
     errPhoneCh: 'Please enter a valid Swiss phone number (+41 79 123 45 67).',
     errEmail: 'Please enter a valid email address (name@domain.ch).',
@@ -466,7 +463,7 @@ const TRANSLATIONS = {
     // Admin Dashboard
     adminTitle: 'Owner Dashboard · Manage Bookings',
     adminSub:
-      'Private control panel (Base: 8048 Zürich · 30 km radius). Review incoming bookings, open Google Maps, or send 1-click WhatsApp confirmations.',
+      'Private control panel (Base: Zürich · 30 km radius). Review incoming bookings, open Google Maps, or send 1-click WhatsApp confirmations.',
     statusPending: 'Pending Confirmation',
     statusConfirmed: 'Confirmed',
     statusDeclined: 'Declined',
@@ -523,7 +520,7 @@ export default function App() {
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState('');
   const [adminFilter, setAdminFilter] = useState('all');
-  const OWNER_PIN = '8000';
+  const OWNER_PIN = '0809';
 
   // Check if URL has ?admin=1 on load
   useEffect(() => {
@@ -573,7 +570,7 @@ export default function App() {
   const [clientEmail, setClientEmail] = useState('');
   const [clientNotes, setClientNotes] = useState('');
 
-  // --- SWISS GEOADMIN API + 30 KM RADIUS FILTER FROM 8048 ZÜRICH ---
+  // --- SWISS GEOADMIN API + 30 KM RADIUS FILTER FROM ZÜRICH ---
   useEffect(() => {
     const q = addressQuery.trim();
     if (q.length < 2) {
@@ -614,7 +611,7 @@ export default function App() {
               let distKm = null;
               if (!Number.isNaN(lat) && !Number.isNaN(lon) && lat > 0) {
                 distKm = Math.round(
-                  calcDistanceKm(BASE_COORD_8048.lat, BASE_COORD_8048.lon, lat, lon) * 10
+                  calcDistanceKm(BASE_COORD.lat, BASE_COORD.lon, lat, lon) * 10
                 ) / 10;
               }
               if (match) {
@@ -870,7 +867,7 @@ export default function App() {
         street: street.trim(),
         plz: plz.trim(),
         city: city.trim(),
-        distKmFrom8048: selectedDistanceKm
+        distKmFromBase: selectedDistanceKm
       },
       client: {
         name: clientName.trim(),
@@ -953,7 +950,7 @@ export default function App() {
       setPinError('');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } else {
-      setPinError('Falscher PIN-Code / Invalid PIN (Demo: 8000)');
+      setPinError('Falscher PIN-Code / Invalid PIN');
     }
   };
 
@@ -1013,10 +1010,7 @@ export default function App() {
               </button>
             </div>
             <p className="text-xs text-slate-600">
-              Geschützter Inhaber-Bereich (8048 Zürich · 30 km Radius). Bitte PIN eingeben:
-              <span className="block mt-1 font-semibold text-emerald-700 bg-emerald-50 px-2 py-1 rounded">
-                Demo Owner PIN: 8000
-              </span>
+              Geschützter Inhaber-Bereich. Bitte PIN eingeben:
             </p>
             <form onSubmit={handlePinLogin} className="space-y-3">
               <input
@@ -1025,7 +1019,7 @@ export default function App() {
                 autoFocus
                 value={pinInput}
                 onChange={(e) => setPinInput(e.target.value)}
-                placeholder="PIN (8000)"
+                placeholder="PIN"
                 className="w-full px-4 py-3 text-center tracking-widest text-lg font-bold rounded-xl border border-slate-300 focus:outline-none focus:border-slate-900"
               />
               {pinError && <p className="text-xs text-red-600 font-semibold">{pinError}</p>}
@@ -1054,7 +1048,7 @@ export default function App() {
               <div className="flex items-center gap-1.5">
                 <span className="font-bold tracking-tight text-lg text-slate-900">ZüriGlanz</span>
                 <span className="text-[11px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
-                  8048 + 30 km
+                  Zürich + 30 km
                 </span>
               </div>
               <p className="text-xs text-slate-500 hidden sm:block">{t.brandSubtitle}</p>
@@ -1099,7 +1093,7 @@ export default function App() {
               <div>
                 <div className="flex items-center gap-2 text-emerald-400 text-xs font-semibold uppercase tracking-wider mb-1">
                   <Lock className="w-3.5 h-3.5" />
-                  <span>Захищений кабінет власника (PIN: 8000)</span>
+                  <span>Захищений кабінет власника</span>
                 </div>
                 <h2 className="text-xl sm:text-2xl font-bold">{t.adminTitle}</h2>
                 <p className="text-sm text-slate-400">{t.adminSub}</p>
@@ -1225,9 +1219,9 @@ export default function App() {
                           <span>
                             <strong className="text-slate-400">Adresse:</strong> {b.location?.street},{' '}
                             {b.location?.plz} {b.location?.city}
-                            {b.location?.distKmFrom8048 != null && (
+                            {b.location?.distKmFromBase != null && (
                               <span className="ml-1.5 text-emerald-400 font-semibold">
-                                ({b.location.distKmFrom8048} km ab 8048)
+                                ({b.location.distKmFromBase} km ab Zürich)
                               </span>
                             )}
                           </span>
@@ -2046,7 +2040,7 @@ export default function App() {
                         </span>
                         {selectedDistanceKm !== null && (
                           <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                            ca. {selectedDistanceKm} km ab 8048 ZH ✓
+                            ca. {selectedDistanceKm} km ab Zürich ✓
                           </span>
                         )}
                       </label>
@@ -2147,7 +2141,7 @@ export default function App() {
                           maxLength={4}
                           value={plz}
                           onChange={(e) => setPlz(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                          placeholder="8048"
+                          placeholder="8001"
                           className={`w-full px-4 py-3 rounded-xl border text-sm ${
                             plz.length > 0 && !isPlzValid
                               ? 'border-red-400 bg-red-50/20'
@@ -2372,7 +2366,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             <span className="font-bold text-slate-900">ZüriGlanz Mobile Detailing</span>
             <span>·</span>
-            <span>8048 Zürich + 30 km Umkreis</span>
+            <span>Zürich + 30 km Umkreis</span>
           </div>
           <div className="flex items-center gap-4">
             <span>Eco-Waterless Technology · 2 Slots/Tag (08:00–12:00 & 14:00–18:00)</span>
