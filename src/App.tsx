@@ -1,21 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo } from 'react';
-import { initializeApp } from 'firebase/app';
-import {
-  getAuth,
-  signInAnonymously,
-  signInWithCustomToken,
-  onAuthStateChanged
-} from 'firebase/auth';
-import {
-  getFirestore,
-  collection,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  doc,
-  onSnapshot
-} from 'firebase/firestore';
+import { createClient } from '@supabase/supabase-js';
 import {
   Sparkles,
   ShieldCheck,
@@ -50,20 +35,11 @@ import {
   ShieldAlert
 } from 'lucide-react';
 
-// --- FIREBASE INITIALIZATION ---
-const firebaseConfig =
-  typeof __firebase_config !== 'undefined' && __firebase_config
-    ? JSON.parse(__firebase_config)
-    : {
-        apiKey: 'demo-api-key',
-        authDomain: 'demo.firebaseapp.com',
-        projectId: 'demo-project'
-      };
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'zuriglanz-detailing-zh';
+// --- SUPABASE CLIENT (keys come from .env / Vercel Environment Variables) ---
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co',
+  import.meta.env.VITE_SUPABASE_ANON_KEY || 'placeholder-key'
+);
 
 // --- BASE LOCATION: ZÜRICH (CITY CENTRE) & 30 KM RADIUS ---
 const BASE_COORD = { lat: 47.3779, lon: 8.5403 };
@@ -114,25 +90,19 @@ const ZURICH_STREETS_DB = [
 ];
 
 const POPULAR_CAR_MAKES = [
-  'BMW X3',
-  'BMW X5',
-  'BMW 3er Touring',
-  'Tesla Model Y',
-  'Tesla Model 3',
-  'Mercedes-Benz GLC',
-  'Mercedes-Benz C-Klasse',
-  'Mercedes-Benz GLE',
-  'Audi Q5',
-  'Audi A4 Avant',
-  'Audi Q3',
-  'Porsche Macan',
-  'Porsche Cayenne',
-  'VW Golf',
-  'VW Tiguan',
-  'Skoda Octavia Kombi',
-  'Skoda Kodiaq',
-  'Volvo XC60',
-  'Volvo XC90'
+  'VW Golf', 'VW Polo', 'VW Passat Variant', 'VW Tiguan', 'VW T-Roc', 'VW Touareg', 'VW Multivan',
+  'Skoda Octavia', 'Skoda Octavia Kombi', 'Skoda Superb Combi', 'Skoda Karoq', 'Skoda Kodiaq', 'Skoda Fabia',
+  'Seat Leon', 'Seat Ateca', 'Cupra Formentor',
+  'BMW 1er', 'BMW 3er', 'BMW 3er Touring', 'BMW 5er', 'BMW X1', 'BMW X3', 'BMW X5', 'BMW X7',
+  'Mercedes-Benz A-Klasse', 'Mercedes-Benz C-Klasse', 'Mercedes-Benz E-Klasse', 'Mercedes-Benz GLA',
+  'Mercedes-Benz GLC', 'Mercedes-Benz GLE', 'Mercedes-Benz V-Klasse',
+  'Audi A3', 'Audi A4', 'Audi A4 Avant', 'Audi A6 Avant', 'Audi Q3', 'Audi Q5', 'Audi Q7',
+  'Tesla Model 3', 'Tesla Model Y', 'Tesla Model X',
+  'Porsche Macan', 'Porsche Cayenne', 'Porsche Taycan',
+  'Volvo V60', 'Volvo XC40', 'Volvo XC60', 'Volvo XC90',
+  'Toyota Yaris', 'Toyota Corolla', 'Toyota RAV4', 'Hyundai Tucson', 'Hyundai Kona', 'Kia Sportage',
+  'Ford Focus', 'Ford Kuga', 'Opel Corsa', 'Opel Astra', 'Renault Clio', 'Peugeot 3008', 'Mazda CX-5',
+  'Land Rover Defender', 'Range Rover', 'Mini Cooper', 'Mini Countryman'
 ];
 
 // --- PRICING TIERS & ADDONS ---
@@ -141,6 +111,59 @@ const BODY_TIERS = [
   { id: 'suv', labelKey: 'sizeSuv', price: 30, example: 'Skoda Octavia Kombi, BMW X3, Audi Q5' },
   { id: 'large', labelKey: 'sizeLarge', price: 60, example: 'BMW X5/X7, Mercedes GLE, VW Multivan' }
 ];
+
+// --- AUTOMATIC VEHICLE CATEGORY DETECTION (by model name) ---
+// Returns 'large' | 'suv' | 'compact' or null if the model is unknown.
+// Order matters: the most specific / most expensive category is checked first.
+const LARGE_MODELS = [
+  'x ?[567]', 'ix', 'gle', 'gls', 'g ?klasse', 'g ?class', 'g ?wagen', 'v ?klasse', 'v ?class',
+  'vito', 'viano', 'sprinter', 'eqv', 'q7', 'q8', 'multivan', 'caravelle', 'california',
+  'transporter', 'touareg', 'touran', 'sharan', 'caddy', 'allspace', 'id ?buzz', 'amarok',
+  'crafter', 'cayenne', 'xc ?90', 'ex ?90', 'kodiaq', 'tarraco', '5008', 'model ?x',
+  'land ?cruiser', 'defender', 'range ?rover', 'discovery', 'santa ?fe', 'palisade',
+  'sorento', 'grand ?cherokee', 'wrangler', 'ranger', 'hilux', 'navara', 'transit', 'galaxy',
+  's ?max', 'espace', 'alhambra', 'zafira', 'trafic', 'vivaro', 'jumper', 'ducato', 'boxer',
+  'grand ?scenic', 'urus', 'bentayga', 'cullinan', 'ev9', 'pathfinder', 'sienna'
+];
+const SUV_MODELS = [
+  'x ?[1234]', 'ix ?[123]', 'touring', 'avant', 'variant', 'kombi', 'combi', 'estate', 'wagon',
+  'sportwagon', 'shooting ?brake', 'break', 'sw', 't ?modell', 'tourer', 'sports ?tourer',
+  'turismo', 'gla', 'glb', 'glc', 'eqa', 'eqb', 'eqc', 'q[2345]', 'e ?tron', 'tiguan', 't ?roc',
+  't ?cross', 'taigo', 'id ?[45]', 'karoq', 'kamiq', 'enyaq', 'ateca', 'arona', 'formentor',
+  'model ?y', 'macan', 'xc ?[246]0', 'ex ?[34]0', 'ec ?40', 'c ?40', 'v ?[69]0', 'v ?40',
+  'cross ?country', '2008', '3008', 'captur', 'kadjar', 'austral', 'arkana', 'koleos', 'kuga',
+  'puma', 'ecosport', 'edge', 'mokka', 'grandland', 'crossland', 'frontera', 'rav ?4', 'c ?hr',
+  'yaris ?cross', 'corolla ?cross', 'bz ?4x', 'tucson', 'kona', 'bayon', 'ioniq ?5', 'sportage',
+  'niro', 'ev ?6', 'xceed', 'stonic', 'cx ?[0-9]+', 'mx ?30', 'qashqai', 'juke', 'x ?trail',
+  'ariya', 'vitara', 's ?cross', 'forester', 'outback', 'xv', 'cr ?v', 'hr ?v', 'zr ?v', 'compass',
+  'renegade', 'avenger', 'evoque', 'velar', 'discovery ?sport', 'f ?pace', 'e ?pace', 'i ?pace',
+  'nx', 'rx', 'ux', 'stelvio', 'tonale', 'duster', 'jogger', 'stepway', 'bigster', '500 ?x',
+  'c3 ?aircross', 'c5 ?aircross', 'berlingo', 'countryman', 'clubman', 'kangoo', 'partner'
+];
+const COMPACT_MODELS = [
+  'golf', 'polo', 'up', 'passat', 'arteon', 'jetta', 'id ?3', 'model ?3', 'model ?s',
+  '[1-8] ?er', '[1-8] ?series', 'i[3-8]', 'z4', 'm[2-8]', 'a[1-8]', 's[3-8]', 'rs ?[3-7]', 'tt',
+  'r8', '[abcmes] ?klasse', '[abcmes] ?class', 'cla', 'cls', 'slk', 'amg ?gt', 'eqe', 'eqs',
+  'corsa', 'astra', 'insignia', 'adam', 'fiesta', 'focus', 'mustang', 'mondeo', '500', '500e',
+  'panda', 'tipo', 'clio', 'megane', 'twingo', 'zoe', '208', '308', '508', '107', '108', '206',
+  '207', '306', 'c1', 'c3', 'c4', 'c5', 'yaris', 'corolla', 'aygo', 'camry', 'prius', 'civic',
+  'jazz', 'accord', 'i10', 'i20', 'i30', 'i40', 'ceed', 'rio', 'picanto', 'fabia', 'octavia',
+  'superb', 'rapid', 'citigo', 'ibiza', 'leon', 'mii', 'mazda ?[236]', 'swift', 'ignis', 'baleno',
+  'impreza', 'legacy', '911', '718', 'boxster', 'cayman', 'panamera', 'taycan', 'carrera', 'giulia',
+  'giulietta', 'mito', 'mini', 'cooper', 'leaf', 'e ?up', 'e ?golf', 'ioniq ?6'
+];
+const normalizeCarText = (text) =>
+  ' ' + String(text).toLowerCase().replace(/[-_.\/]/g, ' ').replace(/\s+/g, ' ').trim() + ' ';
+const matchesAny = (normalized, list) =>
+  list.some((p) => new RegExp('(?:^|\\s)(?:' + p + ')(?:\\s|$)').test(normalized));
+const detectBodyTier = (text) => {
+  const n = normalizeCarText(text);
+  if (n.trim().length < 2) return null;
+  if (matchesAny(n, LARGE_MODELS)) return 'large';
+  if (matchesAny(n, SUV_MODELS)) return 'suv';
+  if (matchesAny(n, COMPACT_MODELS)) return 'compact';
+  return null;
+};
 
 const ADDONS = [
   {
@@ -510,22 +533,26 @@ export default function App() {
   const [lang, setLang] = useState('de');
   const t = TRANSLATIONS[lang];
 
-  // Auth & Firestore Bookings
-  const [user, setUser] = useState(null);
+  // Owner session & bookings
+  const [session, setSession] = useState(null);
+  const [takenSlots, setTakenSlots] = useState([]);
   const [bookings, setBookings] = useState([]);
 
   // Hidden PIN-Protected Owner Dashboard State
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
-  const [pinInput, setPinInput] = useState('');
+  const [loginEmail, setLoginEmail] = useState('');
+  const [pinInput, setPinInput] = useState(''); // holds the owner password
   const [pinError, setPinError] = useState('');
   const [adminFilter, setAdminFilter] = useState('all');
-  const OWNER_PIN = '0809';
 
   // Check if URL has ?admin=1 on load
   useEffect(() => {
     if (typeof window !== 'undefined' && window.location.search.includes('admin=1')) {
-      setShowPinModal(true);
+      supabase.auth.getSession().then(({ data }) => {
+        if (data.session) setIsAdminMode(true);
+        else setShowPinModal(true);
+      });
     }
   }, []);
 
@@ -549,6 +576,7 @@ export default function App() {
   const [showCarSuggestions, setShowCarSuggestions] = useState(false);
   const [carYear, setCarYear] = useState('2022');
   const [bodyTier, setBodyTier] = useState('compact');
+  const [tierManual, setTierManual] = useState(false); // user clicked a category himself
   const [selectedAddons, setSelectedAddons] = useState(['extractor']);
 
   // Step 4: Date & 2 Daily Slots
@@ -666,46 +694,56 @@ export default function App() {
     setShowAddressDropdown(false);
   };
 
-  // --- FIREBASE AUTHENTICATION ---
+  // --- SUPABASE: OWNER SESSION ---
   useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (err) {
-        console.error('Auth error:', err);
-      }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
     });
-    return () => unsubscribe();
+    return () => sub.subscription.unsubscribe();
   }, []);
 
-  // --- FIREBASE FIRESTORE LISTENER ---
+  // --- PUBLIC: taken slots only (no personal data) ---
+  const loadTakenSlots = async () => {
+    const { data, error } = await supabase.rpc('get_taken_slots');
+    if (!error && data) setTakenSlots(data);
+  };
   useEffect(() => {
-    if (!user) return;
-    const bookingsRef = collection(db, 'artifacts', appId, 'public', 'data', 'bookings');
-    const unsubscribe = onSnapshot(
-      bookingsRef,
-      (snapshot) => {
-        const list = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...d.data()
-        }));
-        list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-        setBookings(list);
-      },
-      (error) => {
-        console.error('Firestore listener error:', error);
-      }
-    );
-    return () => unsubscribe();
-  }, [user]);
+    loadTakenSlots();
+    const timer = setInterval(loadTakenSlots, 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // --- OWNER ONLY: full booking list ---
+  const rowToBooking = (r) => ({
+    id: r.id,
+    status: r.status,
+    date: r.date,
+    slot: r.slot,
+    createdAt: new Date(r.created_at).getTime(),
+    ...(r.details || {})
+  });
+  const loadBookings = async () => {
+    const { data, error } = await supabase
+      .from('bookings')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) {
+      console.error('Load bookings error:', error);
+      return;
+    }
+    setBookings((data || []).map(rowToBooking));
+  };
+  useEffect(() => {
+    if (!session) {
+      setBookings([]);
+      setIsAdminMode(false);
+      return;
+    }
+    loadBookings();
+    const timer = setInterval(loadBookings, 30000);
+    return () => clearInterval(timer);
+  }, [session]);
 
   // --- PRICE CALCULATION ---
   const totalPrice = useMemo(() => {
@@ -720,9 +758,7 @@ export default function App() {
   }, [bodyTier, selectedAddons]);
 
   const isSlotTaken = (dateStr, slotStr) => {
-    return bookings.some(
-      (b) => b.date === dateStr && b.slot === slotStr && b.status !== 'declined'
-    );
+    return takenSlots.some((s) => s.date === dateStr && s.slot === slotStr);
   };
 
   const isSunday = (dateStr) => {
@@ -737,6 +773,15 @@ export default function App() {
       prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
     );
   };
+
+  // Car model typed/selected -> detect category automatically (user can still override)
+  const applyCarModel = (text) => {
+    setCarMakeModel(text);
+    setTierManual(false);
+    setBodyTier(detectBodyTier(text) || 'compact');
+  };
+  const detectedTier = useMemo(() => detectBodyTier(carMakeModel), [carMakeModel]);
+  const tierConfirmed = tierManual || detectedTier !== null;
 
   // --- STRICT FIELD VALIDATORS ---
   const isCarMakeValid = useMemo(() => {
@@ -790,7 +835,7 @@ export default function App() {
   const canProceedStep2 =
     ecoDisclaimerAccepted && (dirtLevel === 'light' || dirtLevel === 'normal');
 
-  const canProceedStep3 = isCarMakeValid && isCarYearValid;
+  const canProceedStep3 = isCarMakeValid && isCarYearValid && tierConfirmed;
   const canProceedStep4 =
     selectedDate &&
     !isSunday(selectedDate) &&
@@ -823,7 +868,13 @@ export default function App() {
       }
     }
     if (step === 3 && !canProceedStep3) {
-      setFormError(t.errCarMake);
+      setFormError(
+        isCarMakeValid && isCarYearValid && !tierConfirmed
+          ? lang === 'de'
+            ? 'Bitte wählen Sie die passende Fahrzeugkategorie.'
+            : 'Please select the matching vehicle category.'
+          : t.errCarMake
+      );
       return;
     }
     if (step === 4 && !canProceedStep4) {
@@ -878,50 +929,53 @@ export default function App() {
     };
 
     try {
-      if (user) {
-        const bookingsRef = collection(db, 'artifacts', appId, 'public', 'data', 'bookings');
-        const docRef = await addDoc(bookingsRef, newBooking);
-        setSubmittedBooking({ id: docRef.id, ...newBooking });
-      } else {
-        setSubmittedBooking({ id: 'ZH-' + Math.floor(1000 + Math.random() * 9000), ...newBooking });
-      }
+      const id = crypto.randomUUID();
+      const { status, date, slot, createdAt, ...details } = newBooking;
+      const { error } = await supabase
+        .from('bookings')
+        .insert({ id, status: 'pending', date, slot, details });
+      if (error) throw error;
+      setSubmittedBooking({ id, ...newBooking });
+      loadTakenSlots();
     } catch (err) {
       console.error('Error saving booking:', err);
-      setSubmittedBooking({ id: 'ZH-' + Math.floor(1000 + Math.random() * 9000), ...newBooking });
+      loadTakenSlots();
+      setFormError(
+        err && err.code === '23505'
+          ? 'Dieser Termin wurde soeben vergeben. Bitte wählen Sie einen anderen Slot. / This slot was just taken. Please choose another one.'
+          : 'Die Buchung konnte nicht gespeichert werden. Bitte versuchen Sie es erneut. / Your booking could not be saved. Please try again.'
+      );
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const updateBookingStatus = async (bookingId, newStatus) => {
-    if (!user) return;
-    try {
-      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'bookings', bookingId);
-      await updateDoc(docRef, { status: newStatus });
-    } catch (err) {
-      console.error('Error updating status:', err);
-    }
+    if (!session) return;
+    const { error } = await supabase
+      .from('bookings')
+      .update({ status: newStatus })
+      .eq('id', bookingId);
+    if (error) console.error('Error updating status:', error);
+    loadBookings();
+    loadTakenSlots();
   };
 
   const deleteBooking = async (bookingId) => {
-    if (!user) return;
-    try {
-      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'bookings', bookingId);
-      await deleteDoc(docRef);
-    } catch (err) {
-      console.error('Error deleting booking:', err);
-    }
+    if (!session) return;
+    const { error } = await supabase.from('bookings').delete().eq('id', bookingId);
+    if (error) console.error('Error deleting booking:', error);
+    loadBookings();
+    loadTakenSlots();
   };
 
   const handleManualBlockSlot = async (dateToBlock, slotToBlock) => {
-    if (!user) return;
-    try {
-      const bookingsRef = collection(db, 'artifacts', appId, 'public', 'data', 'bookings');
-      await addDoc(bookingsRef, {
-        status: 'confirmed',
-        createdAt: Date.now(),
-        date: dateToBlock,
-        slot: slotToBlock,
+    if (!session) return;
+    const { error } = await supabase.from('bookings').insert({
+      status: 'confirmed',
+      date: dateToBlock,
+      slot: slotToBlock,
+      details: {
         carMakeModel: 'Telefon-Buchung / Blockiert',
         carYear: '2026',
         bodyTier: 'compact',
@@ -935,23 +989,28 @@ export default function App() {
           email: '',
           notes: 'Manuell vom Inhaber reserviert'
         }
-      });
-    } catch (err) {
-      console.error('Error blocking slot:', err);
-    }
+      }
+    });
+    if (error) console.error('Error blocking slot:', error);
+    loadBookings();
+    loadTakenSlots();
   };
 
-  const handlePinLogin = (e) => {
+  const handlePinLogin = async (e) => {
     e.preventDefault();
-    if (pinInput.trim() === OWNER_PIN) {
-      setIsAdminMode(true);
-      setShowPinModal(false);
-      setPinInput('');
-      setPinError('');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    } else {
-      setPinError('Falscher PIN-Code / Invalid PIN');
+    setPinError('');
+    const { error } = await supabase.auth.signInWithPassword({
+      email: loginEmail.trim(),
+      password: pinInput
+    });
+    if (error) {
+      setPinError('Login fehlgeschlagen / Login failed');
+      return;
     }
+    setIsAdminMode(true);
+    setShowPinModal(false);
+    setPinInput('');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const buildWhatsAppLink = (b) => {
@@ -1010,17 +1069,25 @@ export default function App() {
               </button>
             </div>
             <p className="text-xs text-slate-600">
-              Geschützter Inhaber-Bereich. Bitte PIN eingeben:
+              Geschützter Inhaber-Bereich. Bitte anmelden:
             </p>
             <form onSubmit={handlePinLogin} className="space-y-3">
               <input
-                type="password"
-                inputMode="numeric"
+                type="email"
                 autoFocus
+                autoComplete="username"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                placeholder="E-Mail"
+                className="w-full px-4 py-3 text-sm rounded-xl border border-slate-300 focus:outline-none focus:border-slate-900"
+              />
+              <input
+                type="password"
+                autoComplete="current-password"
                 value={pinInput}
                 onChange={(e) => setPinInput(e.target.value)}
-                placeholder="PIN"
-                className="w-full px-4 py-3 text-center tracking-widest text-lg font-bold rounded-xl border border-slate-300 focus:outline-none focus:border-slate-900"
+                placeholder="Passwort"
+                className="w-full px-4 py-3 text-sm rounded-xl border border-slate-300 focus:outline-none focus:border-slate-900"
               />
               {pinError && <p className="text-xs text-red-600 font-semibold">{pinError}</p>}
               <button
@@ -1074,7 +1141,10 @@ export default function App() {
 
             {isAdminMode && (
               <button
-                onClick={() => setIsAdminMode(false)}
+                onClick={async () => {
+                  await supabase.auth.signOut();
+                  setIsAdminMode(false);
+                }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition"
               >
                 <LogOut className="w-3.5 h-3.5" />
@@ -1803,7 +1873,7 @@ export default function App() {
                           value={carMakeModel}
                           onFocus={() => setShowCarSuggestions(true)}
                           onBlur={() => setTimeout(() => setShowCarSuggestions(false), 180)}
-                          onChange={(e) => setCarMakeModel(e.target.value)}
+                          onChange={(e) => applyCarModel(e.target.value)}
                           placeholder={t.carMakePlaceholder}
                           className={`w-full px-4 py-3 rounded-xl border text-sm focus:outline-none ${
                             carMakeModel.length > 0 && !isCarMakeValid
@@ -1822,7 +1892,7 @@ export default function App() {
                                 key={make}
                                 type="button"
                                 onMouseDown={() => {
-                                  setCarMakeModel(make);
+                                  applyCarModel(make);
                                   setShowCarSuggestions(false);
                                 }}
                                 className="w-full text-left px-4 py-2 text-xs sm:text-sm hover:bg-slate-100 flex items-center justify-between"
@@ -1862,14 +1932,38 @@ export default function App() {
                       <label className="block text-xs font-bold uppercase text-slate-500">
                         {t.selectBodyType}
                       </label>
+                      {detectedTier && !tierManual && (
+                        <p className="text-xs font-semibold text-emerald-700 flex items-center gap-1">
+                          <Check className="w-3.5 h-3.5" />
+                          {lang === 'de' ? 'Automatisch erkannt: ' : 'Detected automatically: '}
+                          {t[BODY_TIERS.find((x) => x.id === detectedTier).labelKey]} (
+                          {BODY_TIERS.find((x) => x.id === detectedTier).price === 0
+                            ? lang === 'de'
+                              ? 'inkl.'
+                              : 'incl.'
+                            : `+${BODY_TIERS.find((x) => x.id === detectedTier).price} CHF`}
+                          ){' · '}
+                          {lang === 'de' ? 'bei Bedarf unten ändern' : 'change below if needed'}
+                        </p>
+                      )}
+                      {isCarMakeValid && !tierConfirmed && (
+                        <p className="text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                          {lang === 'de'
+                            ? 'Dieses Modell kennen wir noch nicht. Bitte wählen Sie unten die passende Fahrzeugkategorie.'
+                            : 'We do not know this model yet. Please select the matching vehicle category below.'}
+                        </p>
+                      )}
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         {BODY_TIERS.map((tier) => (
                           <button
                             key={tier.id}
                             type="button"
-                            onClick={() => setBodyTier(tier.id)}
+                            onClick={() => {
+                              setBodyTier(tier.id);
+                              setTierManual(true);
+                            }}
                             className={`p-3.5 rounded-xl border text-left transition flex flex-col justify-between ${
-                              bodyTier === tier.id
+                              (tierConfirmed && bodyTier === tier.id)
                                 ? 'border-slate-900 bg-slate-900 text-white'
                                 : 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
                             }`}
@@ -1878,7 +1972,7 @@ export default function App() {
                               <div className="font-bold text-sm">{t[tier.labelKey]}</div>
                               <div
                                 className={`text-[11px] mt-0.5 ${
-                                  bodyTier === tier.id ? 'text-slate-300' : 'text-slate-500'
+                                  (tierConfirmed && bodyTier === tier.id) ? 'text-slate-300' : 'text-slate-500'
                                 }`}
                               >
                                 {tier.example}
