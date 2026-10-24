@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createClient } from '@supabase/supabase-js';
 import {
   Sparkles,
   ShieldCheck,
@@ -31,310 +32,14 @@ import {
   KeyRound,
   LogOut,
   PlusCircle,
-  ShieldAlert,
-  Bell,
-  BellRing,
-  Smartphone,
-  Wallet,
-  Receipt,
-  Navigation,
-  Send,
-  Edit3,
-  Download,
-  RefreshCw,
-  CheckCheck,
-  CreditCard,
-  TrendingUp,
-  Wrench,
-  Globe
+  ShieldAlert
 } from 'lucide-react';
 
-// --- SAFE RUNTIME ENV & SUPABASE CLIENT (Works in Preview + Vercel Vite) ---
-const getRuntimeEnv = () => {
-  try {
-    const metaEnv = (0, eval)('typeof import.meta !== "undefined" ? import.meta.env : undefined');
-    if (metaEnv) return metaEnv;
-  } catch (_e) {
-    // Ignore in es2015 preview environments
-  }
-  return {};
-};
-
-const runtimeEnv = getRuntimeEnv();
-const envUrl = runtimeEnv.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
-const envKey = runtimeEnv.VITE_SUPABASE_ANON_KEY || 'placeholder-key';
-const isPlaceholderSupabase = envUrl.includes('placeholder.supabase.co');
-
-// Lightweight compatible Supabase client (uses real Supabase REST/Auth/Realtime when keys are set, or local fallback in Preview)
-const createUniversalSupabaseClient = (baseUrl, apiKey) => {
-  const STORAGE_KEY = 'zuriglanz_supabase_session';
-  const LOCAL_BOOKINGS_KEY = 'zuriglanz_local_bookings';
-  const LOCAL_EXPENSES_KEY = 'zuriglanz_local_expenses';
-  const LOCAL_SETTINGS_KEY = 'zuriglanz_local_settings';
-  const authListeners = new Set();
-  const realtimeChannels = new Set();
-
-  const getStoredSession = () => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  };
-
-  const buildHeaders = (extra = {}) => {
-    const sess = getStoredSession();
-    const token = sess?.access_token || apiKey;
-    return {
-      apikey: apiKey,
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...extra
-    };
-  };
-
-  const readLocal = (key, fallback) => {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : fallback;
-    } catch {
-      return fallback;
-    }
-  };
-
-  const writeLocal = (key, val) => {
-    try {
-      localStorage.setItem(key, JSON.stringify(val));
-    } catch {
-      // ignore storage quota errors
-    }
-  };
-
-  return {
-    auth: {
-      getSession: async () => ({ data: { session: getStoredSession() }, error: null }),
-      onAuthStateChange: (cb) => {
-        authListeners.add(cb);
-        return {
-          data: {
-            subscription: {
-              unsubscribe: () => authListeners.delete(cb)
-            }
-          }
-        };
-      },
-      signInWithPassword: async ({ email, password }) => {
-        if (isPlaceholderSupabase) {
-          if (email && password) {
-            const demoSession = {
-              access_token: 'demo-token',
-              user: { email }
-            };
-            writeLocal(STORAGE_KEY, demoSession);
-            authListeners.forEach((cb) => cb('SIGNED_IN', demoSession));
-            return { data: { session: demoSession }, error: null };
-          }
-          return { data: null, error: { message: 'Введіть email та пароль' } };
-        }
-        try {
-          const res = await fetch(`${baseUrl}/auth/v1/token?grant_type=password`, {
-            method: 'POST',
-            headers: { apikey: apiKey, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password })
-          });
-          const data = await res.json();
-          if (!res.ok) {
-            return { data: null, error: { message: data.error_description || data.msg || 'Login failed' } };
-          }
-          writeLocal(STORAGE_KEY, data);
-          authListeners.forEach((cb) => cb('SIGNED_IN', data));
-          return { data: { session: data }, error: null };
-        } catch (err) {
-          return { data: null, error: { message: err.message } };
-        }
-      },
-      signOut: async () => {
-        try {
-          localStorage.removeItem(STORAGE_KEY);
-        } catch {
-          // ignore
-        }
-        authListeners.forEach((cb) => cb('SIGNED_OUT', null));
-        return { error: null };
-      }
-    },
-    rpc: async (fnName) => {
-      if (isPlaceholderSupabase) {
-        const list = readLocal(LOCAL_BOOKINGS_KEY, []);
-        return {
-          data: list
-            .filter((b) => b.status !== 'declined')
-            .map((b) => ({ date: b.date, slot: b.slot })),
-          error: null
-        };
-      }
-      try {
-        const res = await fetch(`${baseUrl}/rest/v1/rpc/${fnName}`, {
-          method: 'POST',
-          headers: buildHeaders()
-        });
-        const data = await res.json();
-        return { data: res.ok ? data : null, error: res.ok ? null : data };
-      } catch (err) {
-        return { data: null, error: err };
-      }
-    },
-    from: (table) => {
-      const state = {
-        table,
-        method: 'GET',
-        queryParams: [],
-        bodyData: null,
-        singleRow: false
-      };
-
-      const execute = async () => {
-        if (isPlaceholderSupabase) {
-          const storageKey =
-            table === 'bookings'
-              ? LOCAL_BOOKINGS_KEY
-              : table === 'expenses'
-              ? LOCAL_EXPENSES_KEY
-              : LOCAL_SETTINGS_KEY;
-
-          if (table === 'settings') {
-            const current = readLocal(LOCAL_SETTINGS_KEY, { id: 1, cost_per_km: 0.7 });
-            if (state.method === 'PATCH' && state.bodyData) {
-              const updated = { ...current, ...state.bodyData };
-              writeLocal(LOCAL_SETTINGS_KEY, updated);
-              return { data: updated, error: null };
-            }
-            return { data: current, error: null };
-          }
-
-          let rows = readLocal(storageKey, []);
-          if (state.method === 'GET') {
-            return { data: rows, error: null };
-          }
-          if (state.method === 'POST') {
-            const newRow = {
-              id: state.bodyData?.id || crypto.randomUUID(),
-              created_at: new Date().toISOString(),
-              ...state.bodyData
-            };
-            rows = [newRow, ...rows];
-            writeLocal(storageKey, rows);
-            if (table === 'bookings') {
-              realtimeChannels.forEach((ch) => ch.trigger('INSERT', newRow));
-            }
-            return { data: newRow, error: null };
-          }
-          if (state.method === 'PATCH') {
-            const eqFilter = state.queryParams.find((p) => p.startsWith('id=eq.'));
-            const targetId = eqFilter ? eqFilter.replace('id=eq.', '') : null;
-            rows = rows.map((r) => (String(r.id) === String(targetId) ? { ...r, ...state.bodyData } : r));
-            writeLocal(storageKey, rows);
-            if (table === 'bookings') {
-              realtimeChannels.forEach((ch) => ch.trigger('UPDATE', state.bodyData));
-            }
-            return { data: rows, error: null };
-          }
-          if (state.method === 'DELETE') {
-            const eqFilter = state.queryParams.find((p) => p.startsWith('id=eq.'));
-            const targetId = eqFilter ? eqFilter.replace('id=eq.', '') : null;
-            rows = rows.filter((r) => String(r.id) !== String(targetId));
-            writeLocal(storageKey, rows);
-            return { data: rows, error: null };
-          }
-        }
-
-        try {
-          const qs = state.queryParams.length ? `?${state.queryParams.join('&')}` : '';
-          const headers = buildHeaders(
-            state.singleRow
-              ? { Accept: 'application/vnd.pgrst.object+json' }
-              : { Prefer: 'return=representation' }
-          );
-          const res = await fetch(`${baseUrl}/rest/v1/${table}${qs}`, {
-            method: state.method,
-            headers,
-            body: state.bodyData ? JSON.stringify(state.bodyData) : undefined
-          });
-          const text = await res.text();
-          const data = text ? JSON.parse(text) : null;
-          return { data: res.ok ? data : null, error: res.ok ? null : data };
-        } catch (err) {
-          return { data: null, error: err };
-        }
-      };
-
-      const builder = {
-        select: (cols = '*') => {
-          state.method = 'GET';
-          state.queryParams.push(`select=${encodeURIComponent(cols)}`);
-          return builder;
-        },
-        order: (col, { ascending = true } = {}) => {
-          state.queryParams.push(`order=${col}.${ascending ? 'asc' : 'desc'}`);
-          return builder;
-        },
-        eq: (col, val) => {
-          state.queryParams.push(`${col}=eq.${encodeURIComponent(val)}`);
-          return builder;
-        },
-        maybeSingle: () => {
-          state.singleRow = true;
-          return builder;
-        },
-        insert: (payload) => {
-          state.method = 'POST';
-          state.bodyData = payload;
-          return builder;
-        },
-        update: (payload) => {
-          state.method = 'PATCH';
-          state.bodyData = payload;
-          return builder;
-        },
-        delete: () => {
-          state.method = 'DELETE';
-          return builder;
-        },
-        then: (resolve, reject) => execute().then(resolve, reject)
-      };
-
-      return builder;
-    },
-    channel: (name) => {
-      const handlers = [];
-      const chObj = {
-        name,
-        on: (_type, filter, callback) => {
-          handlers.push({ filter, callback });
-          return chObj;
-        },
-        subscribe: () => {
-          realtimeChannels.add(chObj);
-          return chObj;
-        },
-        trigger: (event, newRecord) => {
-          handlers.forEach((h) => {
-            if (h.filter?.event === event || h.filter?.event === '*') {
-              h.callback({ new: newRecord });
-            }
-          });
-        }
-      };
-      return chObj;
-    },
-    removeChannel: (ch) => {
-      realtimeChannels.delete(ch);
-    }
-  };
-};
-
-const supabase = createUniversalSupabaseClient(envUrl, envKey);
+// --- SUPABASE CLIENT (keys come from .env / Vercel Environment Variables) ---
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co',
+  import.meta.env.VITE_SUPABASE_ANON_KEY || 'placeholder-key'
+);
 
 // --- BASE LOCATION: ZÜRICH (CITY CENTRE) & 30 KM RADIUS ---
 const BASE_COORD = { lat: 47.3779, lon: 8.5403 };
@@ -352,33 +57,6 @@ const calcDistanceKm = (lat1, lon1, lat2, lon2) => {
       Math.sin(dLon / 2) *
       Math.sin(dLon / 2);
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-};
-
-// Web Audio API notification sound (works on Android without external MP3 files)
-const playNotificationSound = () => {
-  try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    const now = ctx.currentTime;
-
-    const notes = [587.33, 880, 1174.66]; // D5 -> A5 -> D6 chime
-    notes.forEach((freq, idx) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, now + idx * 0.14);
-      gain.gain.setValueAtTime(0.001, now + idx * 0.14);
-      gain.gain.exponentialRampToValueAtTime(0.28, now + idx * 0.14 + 0.03);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.14 + 0.35);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now + idx * 0.14);
-      osc.stop(now + idx * 0.14 + 0.36);
-    });
-  } catch (e) {
-    console.debug('Audio play blocked until user interaction:', e);
-  }
 };
 
 // Fallback addresses within 30 km of Zürich (including ZH, AG, ZG, SZ)
@@ -434,7 +112,9 @@ const BODY_TIERS = [
   { id: 'large', labelKey: 'sizeLarge', price: 60, example: 'BMW X5/X7, Mercedes GLE, VW Multivan' }
 ];
 
-// --- AUTOMATIC VEHICLE CATEGORY DETECTION ---
+// --- AUTOMATIC VEHICLE CATEGORY DETECTION (by model name) ---
+// Returns 'large' | 'suv' | 'compact' or null if the model is unknown.
+// Order matters: the most specific / most expensive category is checked first.
 const LARGE_MODELS = [
   'x ?[567]', 'ix', 'gle', 'gls', 'g ?klasse', 'g ?class', 'g ?wagen', 'v ?klasse', 'v ?class',
   'vito', 'viano', 'sprinter', 'eqv', 'q7', 'q8', 'multivan', 'caravelle', 'california',
@@ -506,7 +186,7 @@ const ADDONS = [
   }
 ];
 
-// --- TRANSLATIONS (DE / EN ONLY FOR PUBLIC SITE) ---
+// --- TRANSLATIONS (DE / EN ONLY) ---
 const TRANSLATIONS = {
   de: {
     brandSubtitle: 'Mobile Autoaufbereitung · Zürich + 30 km Umkreis',
@@ -524,6 +204,7 @@ const TRANSLATIONS = {
     statsEco: '100% Legal',
     statsEcoSub: 'Waterless Gewässerschutz',
 
+    // Pricing Section
     pricingTitle: 'Transparente Pauschale & Zusatzleistungen',
     pricingSubtitle: 'Keine versteckten Kosten. Anfahrt im Umkreis von 30 km ab Zürich ist inklusive.',
     basePackageTitle: 'ZüriGlanz Essential Pauschale',
@@ -551,6 +232,7 @@ const TRANSLATIONS = {
     addonPet: 'Tierhaarentfernung & Intensiv-Innenraum',
     addonPetDesc: 'Spezialbürsten-Reinigung bei starker Verschmutzung oder Hundehaaren.',
 
+    // Booking Wizard
     wizardTitle: 'Termin-Reservierung (Zürich + 30 km Umkreis)',
     step1Label: '1. Standort-Check',
     step2Label: '2. Zustand & Umwelt',
@@ -558,6 +240,7 @@ const TRANSLATIONS = {
     step4Label: '4. Datum & Zeit',
     step5Label: '5. Adresse & Kontakt',
 
+    // Step 1
     gateTitle: 'Technische Voraussetzungen vor Ort',
     gateSubtitle:
       'Damit wir 4–5 Stunden höchste Qualität liefern können, bestätigen Sie bitte folgende 3 Punkte:',
@@ -575,6 +258,7 @@ const TRANSLATIONS = {
     gateBlockedMsg:
       'Hinweis: Für die mobile Aufbereitung vor Ort müssen alle 3 Bedingungen erfüllt sein. Bitte prüfen Sie einen alternativen Standort (z.B. Arbeitsplatz oder Einfahrt von Freunden).',
 
+    // Step 2
     envTitle: 'Äusserer Verschmutzungsgrad & Umweltschutz',
     envDisclaimerTitle: 'Wichtiger Umweltschutz-Disclaimer (Gewässerschutz CH)',
     envDisclaimerText:
@@ -588,6 +272,7 @@ const TRANSLATIONS = {
     heavyDirtConfirm:
       'Ich bestätige, dass mein Fahrzeug aussen nicht stark mit Schlamm/Erde verkrustet ist (Umweltschutz bei wasserloser Reinigung).',
 
+    // Step 3
     carDetailsTitle: 'Ihr Fahrzeug & gewünschte Leistungen',
     carMakeLabel: 'Marke & Modell (mind. 3 Zeichen) *',
     carMakePlaceholder: 'z.B. BMW X3, Tesla Model Y, VW Golf',
@@ -597,6 +282,7 @@ const TRANSLATIONS = {
     priceSummary: 'Geschätzter Gesamtpreis',
     durationSummary: 'Geschätzte Arbeitszeit: 4 – 5 Stunden',
 
+    // Step 4
     dateTimeTitle: 'Wunschdatum & Zeitfenster wählen',
     dateTimeSubtitle:
       'Wir vergeben exklusiv 2 Termine pro Tag für maximale Sorgfalt ohne Zeitdruck.',
@@ -608,6 +294,7 @@ const TRANSLATIONS = {
     slotBooked: 'Bereits reserviert',
     slotAvailable: 'Verfügbar',
 
+    // Step 5
     contactTitle: 'Einsatzort (Umkreis 30 km ab Zürich) & Kontaktdaten',
     addressSearchLabel: 'Adresse suchen (30 km Umkreis ab Zürich – inkl. ZH, AG, ZG) *',
     addressSearchPlaceholder: 'Tippen Sie z.B. Badenerstrasse 690, Wettingen, Zug, Schlieren...',
@@ -626,6 +313,7 @@ const TRANSLATIONS = {
     nextBtn: 'Weiter',
     backBtn: 'Zurück',
 
+    // Validation Errors
     errCarMake: 'Bitte geben Sie eine gültige Automarke & Modell an (mind. 3 Buchstaben).',
     errStreetNumber: 'Bitte geben Sie Strasse UND Hausnummer an (z.B. Badenerstrasse 690).',
     errPlzSwiss: 'Bitte eine gültige 4-stellige Schweizer PLZ eingeben (z.B. 8001, 5400, 6300).',
@@ -635,11 +323,13 @@ const TRANSLATIONS = {
     errPhoneCh: 'Bitte gültige Schweizer Nummer eingeben (z.B. +41 79 123 45 67).',
     errEmail: 'Bitte eine gültige E-Mail-Adresse eingeben (z.B. name@domain.ch).',
 
+    // Success Modal
     bookingSuccessTitle: 'Termin-Anfrage erfolgreich gesendet!',
     bookingSuccessText:
       'Vielen Dank! Wir haben Ihre Angaben erhalten. Der Termin hat aktuell den Status "Wartet auf Bestätigung". Ich melde mich in Kürze bei Ihnen.',
     newBookingBtn: 'Weitere Buchung erstellen',
 
+    // Admin Dashboard
     adminTitle: 'Inhaber-Cockpit · Buchungsverwaltung',
     adminSub:
       'Geheime Verwaltungsansicht für ZüriGlanz (Basis Zürich · 30 km Umkreis). Bestätigen Sie Termine oder kontaktieren Sie Kunden direkt per WhatsApp.',
@@ -667,6 +357,7 @@ const TRANSLATIONS = {
     statsEco: 'Eco-Safe',
     statsEcoSub: 'Waterless Technology',
 
+    // Pricing Section
     pricingTitle: 'Transparent Flat Rate & Custom Upgrades',
     pricingSubtitle: 'No hidden fees. Call-out within a 30 km radius of Zürich is included.',
     basePackageTitle: 'ZüriGlanz Essential Care (Pauschale)',
@@ -696,6 +387,7 @@ const TRANSLATIONS = {
     addonPet: 'Pet Hair Removal & Heavy Interior Sanitization',
     addonPetDesc: 'Specialized extraction of stubborn pet hair or heavy cabin soiling.',
 
+    // Booking Wizard
     wizardTitle: 'Book Your Mobile Detailing Slot (30 km Radius)',
     step1Label: '1. Site Pre-Check',
     step2Label: '2. Dirt & Eco Policy',
@@ -703,6 +395,7 @@ const TRANSLATIONS = {
     step4Label: '4. Date & Slot',
     step5Label: '5. Address & Contact',
 
+    // Step 1
     gateTitle: 'On-Site Requirements Check',
     gateSubtitle:
       'Before choosing a slot, please confirm that your location meets these 3 conditions:',
@@ -719,6 +412,7 @@ const TRANSLATIONS = {
     gateBlockedMsg:
       'Important: All 3 conditions are required for mobile service. If unavailable at home, many clients book us at their workplace parking or a friend’s driveway.',
 
+    // Step 2
     envTitle: 'Exterior Dirtiness & Environmental Protection',
     envDisclaimerTitle: 'Environmental Protection Disclaimer (Waterless Wash)',
     envDisclaimerText:
@@ -732,6 +426,7 @@ const TRANSLATIONS = {
     heavyDirtConfirm:
       'I confirm that my car exterior is not covered in thick mud and complies with the waterless environmental protection policy.',
 
+    // Step 3
     carDetailsTitle: 'Vehicle Information & Services',
     carMakeLabel: 'Car Make & Model (min. 3 chars) *',
     carMakePlaceholder: 'e.g. Porsche Macan, Audi A4, Tesla Model 3',
@@ -741,6 +436,7 @@ const TRANSLATIONS = {
     priceSummary: 'Estimated Total',
     durationSummary: 'Estimated Time: 4 – 5 Hours',
 
+    // Step 4
     dateTimeTitle: 'Choose Date & Time Slot',
     dateTimeSubtitle:
       'We strictly limit bookings to 2 cars per day (08:00–12:00 and 14:00–18:00) for uncompromising quality.',
@@ -752,6 +448,7 @@ const TRANSLATIONS = {
     slotBooked: 'Booked',
     slotAvailable: 'Available',
 
+    // Step 5
     contactTitle: 'Service Address (30 km Radius from Zürich) & Contact',
     addressSearchLabel: 'Search Address within 30 km of Zürich (Street, No., PLZ) *',
     addressSearchPlaceholder: 'Type e.g. Badenerstrasse 690, Baden, Zug, Küsnacht...',
@@ -770,6 +467,7 @@ const TRANSLATIONS = {
     nextBtn: 'Continue',
     backBtn: 'Back',
 
+    // Validation Errors
     errCarMake: 'Please enter a valid car make and model (at least 3 letters).',
     errStreetNumber: 'Please include both street name AND house number (e.g. Badenerstrasse 690).',
     errPlzSwiss: 'Please enter a valid 4-digit Swiss postal code (e.g. 8001, 5400, 6300).',
@@ -779,11 +477,13 @@ const TRANSLATIONS = {
     errPhoneCh: 'Please enter a valid Swiss phone number (+41 79 123 45 67).',
     errEmail: 'Please enter a valid email address (name@domain.ch).',
 
+    // Success Modal
     bookingSuccessTitle: 'Booking Request Received!',
     bookingSuccessText:
       'Thank you! Your slot is reserved as "Pending Confirmation". I will review the details and contact you shortly to confirm.',
     newBookingBtn: 'Done',
 
+    // Admin Dashboard
     adminTitle: 'Owner Dashboard · Manage Bookings',
     adminSub:
       'Private control panel (Base: Zürich · 30 km radius). Review incoming bookings, open Google Maps, or send 1-click WhatsApp confirmations.',
@@ -829,6 +529,27 @@ const formatSwissPhone = (raw) => {
 
 const YEAR_OPTIONS = Array.from({ length: 2027 - 1970 + 1 }, (_, i) => String(2027 - i));
 
+// --- OWNER APP (PWA): manifest + service worker are only added on the owner page (?admin=1),
+// so normal visitors never see an "install app" prompt for the owner cabinet. ---
+const setupOwnerPwa = () => {
+  if (typeof document === 'undefined') return;
+  if (!document.querySelector('link[rel="manifest"]')) {
+    const l = document.createElement('link');
+    l.rel = 'manifest';
+    l.href = '/manifest.webmanifest';
+    document.head.appendChild(l);
+  }
+  if (!document.querySelector('link[rel="apple-touch-icon"]')) {
+    const l = document.createElement('link');
+    l.rel = 'apple-touch-icon';
+    l.href = '/apple-touch-icon.png';
+    document.head.appendChild(l);
+  }
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch((e) => console.error('SW error', e));
+  }
+};
+
 // --- ACCOUNTING HELPERS ---
 const EXPENSE_CATEGORIES = [
   'Матеріали',
@@ -868,193 +589,38 @@ const downloadCsv = (filename, rows) => {
   URL.revokeObjectURL(url);
 };
 
-// Demo bookings for testing the Android App in Preview when Supabase .env isn't attached
-const INITIAL_DEMO_BOOKINGS = [
-  {
-    id: 'demo-1',
-    status: 'pending',
-    date: getDefaultDate(),
-    slot: '08:00 - 12:00',
-    createdAt: Date.now() - 1000 * 60 * 12,
-    kmDriven: null,
-    finalPrice: null,
-    paid: false,
-    paymentMethod: '',
-    internalNotes: '',
-    carMakeModel: 'BMW X5',
-    carYear: '2023',
-    bodyTier: 'large',
-    dirtLevel: 'normal',
-    addons: ['extractor', 'polish'],
-    totalPrice: 305,
-    location: {
-      street: 'Seestrasse 65',
-      plz: '8700',
-      city: 'Küsnacht (ZH)',
-      distKmFromBase: 10.5
-    },
-    client: {
-      name: 'Thomas Müller',
-      phone: '+41 79 345 67 89',
-      email: 'thomas.mueller@swissonline.ch',
-      notes: 'Leichter Kratzer an der hinteren Tür rechts. Parkplatz direkt vor der Garage.'
-    }
-  },
-  {
-    id: 'demo-2',
-    status: 'confirmed',
-    date: localDateStr(),
-    slot: '14:00 - 18:00',
-    createdAt: Date.now() - 1000 * 60 * 180,
-    kmDriven: 18.5,
-    finalPrice: 210,
-    paid: true,
-    paymentMethod: 'Twint',
-    internalNotes: '+10 CHF Чайові',
-    carMakeModel: 'Tesla Model Y',
-    carYear: '2024',
-    bodyTier: 'suv',
-    dirtLevel: 'light',
-    addons: ['extractor'],
-    totalPrice: 210,
-    location: {
-      street: 'Badenerstrasse 690',
-      plz: '8048',
-      city: 'Zürich',
-      distKmFromBase: 4.2
-    },
-    client: {
-      name: 'Sarah Jenkins',
-      phone: '+41 78 912 34 56',
-      email: 's.jenkins@gmail.com',
-      notes: 'Visitor parking #3 on the left side.'
-    }
-  }
-];
-
 export default function App() {
   const [lang, setLang] = useState('de');
   const t = TRANSLATIONS[lang];
 
   // Owner session & bookings
   const [session, setSession] = useState(null);
-  const [isDemoAdmin, setIsDemoAdmin] = useState(false);
   const [takenSlots, setTakenSlots] = useState([]);
   const [bookings, setBookings] = useState([]);
+  const seenPendingRef = useRef(null); // ids of pending bookings already seen (for new-order alerts)
+  const [newBookingBanner, setNewBookingBanner] = useState('');
+  const [notifPermission, setNotifPermission] = useState(
+    typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
+  );
 
   // Hidden PIN-Protected Owner Dashboard State
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
-  const [pinInput, setPinInput] = useState('');
+  const [pinInput, setPinInput] = useState(''); // holds the owner password
   const [pinError, setPinError] = useState('');
   const [adminFilter, setAdminFilter] = useState('all');
 
-  // Android App Specific States
-  const [androidTab, setAndroidTab] = useState('inbox'); // 'inbox' | 'jobs' | 'expenses' | 'finance' | 'settings'
-  const [notifPermission, setNotifPermission] = useState(
-    typeof Notification !== 'undefined' ? Notification.permission : 'default'
-  );
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const [liveAlertBooking, setLiveAlertBooking] = useState(null);
-  const [activeWhatsAppBooking, setActiveWhatsAppBooking] = useState(null);
-  const [waTemplateType, setWaTemplateType] = useState('confirm'); // 'confirm' | 'onway' | 'done' | 'decline'
-  const [waLang, setWaLang] = useState('de'); // 'de' | 'en'
-  const [waCustomText, setWaCustomText] = useState('');
-  const [editingJobId, setEditingJobId] = useState(null);
-  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
-
-  const knownBookingIdsRef = useRef(new Set());
-
-  // Inject Android PWA Manifest & Meta Tags so Chrome on Android can install as Native WebAPK
+  // Check if URL has ?admin=1 on load
   useEffect(() => {
-    if (typeof document === 'undefined') return;
-    let themeMeta = document.querySelector('meta[name="theme-color"]');
-    if (!themeMeta) {
-      themeMeta = document.createElement('meta');
-      themeMeta.name = 'theme-color';
-      document.head.appendChild(themeMeta);
-    }
-    themeMeta.content = '#0f172a';
-
-    const manifestObj = {
-      name: 'ZüriGlanz Owner Cockpit',
-      short_name: 'ZüriGlanz',
-      description: 'Мобільний кабінет власника ZüriGlanz Detailing Zürich',
-      start_url: window.location.origin + '/?admin=1',
-      display: 'standalone',
-      background_color: '#0f172a',
-      theme_color: '#0f172a',
-      orientation: 'portrait',
-      icons: [
-        {
-          src: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="22" fill="%230f172a"/><circle cx="78" cy="22" r="14" fill="%23D52B1E"/><text x="50" y="64" font-family="sans-serif" font-size="44" font-weight="bold" fill="white" text-anchor="middle">ZG</text></svg>',
-          sizes: '192x192',
-          type: 'image/svg+xml'
-        }
-      ]
-    };
-    const blob = new Blob([JSON.stringify(manifestObj)], { type: 'application/json' });
-    const manifestUrl = URL.createObjectURL(blob);
-    let linkEl = document.querySelector('link[rel="manifest"]');
-    if (!linkEl) {
-      linkEl = document.createElement('link');
-      linkEl.rel = 'manifest';
-      document.head.appendChild(linkEl);
-    }
-    linkEl.href = manifestUrl;
-    return () => URL.revokeObjectURL(manifestUrl);
-  }, []);
-
-  // Check if URL has ?admin=1 or ?app=1 on load
-  useEffect(() => {
-    if (
-      typeof window !== 'undefined' &&
-      (window.location.search.includes('admin=1') || window.location.search.includes('app=1'))
-    ) {
+    if (typeof window !== 'undefined' && window.location.search.includes('admin=1')) {
+      setupOwnerPwa();
       supabase.auth.getSession().then(({ data }) => {
-        if (data?.session) setIsAdminMode(true);
+        if (data.session) setIsAdminMode(true);
         else setShowPinModal(true);
       });
     }
   }, []);
-
-  // Trigger Android Notification + Sound + Vibration on new booking
-  const triggerNewBookingAlert = (bookingObj) => {
-    setLiveAlertBooking(bookingObj);
-    if (soundEnabled) {
-      playNotificationSound();
-    }
-    if (typeof navigator !== 'undefined' && navigator.vibrate) {
-      navigator.vibrate([250, 120, 250, 120, 400]);
-    }
-    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      try {
-        const n = new Notification(`🔔 Нова бронь: ${bookingObj.carMakeModel} (${bookingObj.totalPrice} CHF)`, {
-          body: `${bookingObj.date} (${bookingObj.slot}) · ${bookingObj.client?.name || ''} · ${bookingObj.location?.city || ''}`,
-          tag: `booking-${bookingObj.id}`,
-          renotify: true
-        });
-        n.onclick = () => {
-          window.focus();
-          setIsAdminMode(true);
-          setAndroidTab('inbox');
-          setActiveWhatsAppBooking(bookingObj);
-        };
-      } catch (e) {
-        console.debug('Notification error:', e);
-      }
-    }
-  };
-
-  const requestAndroidNotificationPermission = async () => {
-    if (typeof Notification === 'undefined') return;
-    const perm = await Notification.requestPermission();
-    setNotifPermission(perm);
-    if (perm === 'granted') {
-      playNotificationSound();
-    }
-  };
 
   // Booking Funnel State
   const [step, setStep] = useState(1);
@@ -1076,7 +642,7 @@ export default function App() {
   const [showCarSuggestions, setShowCarSuggestions] = useState(false);
   const [carYear, setCarYear] = useState('2022');
   const [bodyTier, setBodyTier] = useState('compact');
-  const [tierManual, setTierManual] = useState(false);
+  const [tierManual, setTierManual] = useState(false); // user clicked a category himself
   const [selectedAddons, setSelectedAddons] = useState(['extractor']);
 
   // Step 4: Date & 2 Daily Slots
@@ -1196,16 +762,15 @@ export default function App() {
 
   // --- SUPABASE: OWNER SESSION ---
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data?.session || null));
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
     });
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  // --- PUBLIC: taken slots only ---
+  // --- PUBLIC: taken slots only (no personal data) ---
   const loadTakenSlots = async () => {
-    if (isPlaceholderSupabase) return;
     const { data, error } = await supabase.rpc('get_taken_slots');
     if (!error && data) setTakenSlots(data);
   };
@@ -1215,7 +780,7 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // --- OWNER ONLY: full booking list + REALTIME PUSH NOTIFICATIONS ---
+  // --- OWNER ONLY: full booking list ---
   const rowToBooking = (r) => ({
     id: r.id,
     status: r.status,
@@ -1229,9 +794,7 @@ export default function App() {
     internalNotes: r.internal_notes || '',
     ...(r.details || {})
   });
-
-  const loadBookings = async (checkNewForAlert = false) => {
-    if (isDemoAdmin && !session) return;
+  const loadBookings = async () => {
     const { data, error } = await supabase
       .from('bookings')
       .select('*')
@@ -1240,62 +803,33 @@ export default function App() {
       console.error('Load bookings error:', error);
       return;
     }
-    const mapped = (data || []).map(rowToBooking);
-
-    if (checkNewForAlert && knownBookingIdsRef.current.size > 0) {
-      const brandNew = mapped.find(
-        (b) => !knownBookingIdsRef.current.has(b.id) && b.status === 'pending'
-      );
-      if (brandNew) {
-        triggerNewBookingAlert(brandNew);
-      }
+    const list = (data || []).map(rowToBooking);
+    setBookings(list);
+    const pending = list.filter((b) => b.status === 'pending');
+    if (seenPendingRef.current !== null) {
+      const fresh = pending.filter((b) => !seenPendingRef.current.has(b.id));
+      if (fresh.length) notifyNewBookings(fresh);
     }
-    knownBookingIdsRef.current = new Set(mapped.map((b) => b.id));
-    setBookings(mapped);
+    seenPendingRef.current = new Set(pending.map((b) => b.id));
   };
-
   useEffect(() => {
     if (!session) {
-      if (!isDemoAdmin) {
-        setBookings([]);
-        setIsAdminMode(false);
-      }
+      setBookings([]);
+      setIsAdminMode(false);
+      seenPendingRef.current = null;
       return;
     }
-    loadBookings(false);
-
-    // Subscribe to real-time INSERT & UPDATE events on 'bookings'
-    const channel = supabase
-      .channel('owner-bookings-live')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'bookings' },
-        (payload) => {
-          if (payload?.new) {
-            const bObj = rowToBooking(payload.new);
-            knownBookingIdsRef.current.add(bObj.id);
-            setBookings((prev) => [bObj, ...prev.filter((x) => x.id !== bObj.id)]);
-            if (bObj.status === 'pending') {
-              triggerNewBookingAlert(bObj);
-            }
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'bookings' },
-        () => {
-          loadBookings(false);
-        }
-      )
-      .subscribe();
-
-    const timer = setInterval(() => loadBookings(true), 15000);
+    loadBookings();
+    const timer = setInterval(loadBookings, 30000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadBookings();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       clearInterval(timer);
-      supabase.removeChannel(channel);
+      document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [session, isDemoAdmin, soundEnabled]);
+  }, [session]);
 
   // --- PRICE CALCULATION ---
   const totalPrice = useMemo(() => {
@@ -1326,6 +860,7 @@ export default function App() {
     );
   };
 
+  // Car model typed/selected -> detect category automatically (user can still override)
   const applyCarModel = (text) => {
     setCarMakeModel(text);
     setTierManual(false);
@@ -1481,20 +1016,13 @@ export default function App() {
 
     try {
       const id = crypto.randomUUID();
-      if (isPlaceholderSupabase) {
-        const created = { id, ...newBooking };
-        setBookings((prev) => [created, ...prev]);
-        setSubmittedBooking(created);
-        triggerNewBookingAlert(created);
-      } else {
-        const { status, date, slot, createdAt, ...details } = newBooking;
-        const { error } = await supabase
-          .from('bookings')
-          .insert({ id, status: 'pending', date, slot, details });
-        if (error) throw error;
-        setSubmittedBooking({ id, ...newBooking });
-        loadTakenSlots();
-      }
+      const { status, date, slot, createdAt, ...details } = newBooking;
+      const { error } = await supabase
+        .from('bookings')
+        .insert({ id, status: 'pending', date, slot, details });
+      if (error) throw error;
+      setSubmittedBooking({ id, ...newBooking });
+      loadTakenSlots();
     } catch (err) {
       console.error('Error saving booking:', err);
       loadTakenSlots();
@@ -1509,12 +1037,6 @@ export default function App() {
   };
 
   const updateBookingStatus = async (bookingId, newStatus) => {
-    if (isDemoAdmin && !session) {
-      setBookings((prev) =>
-        prev.map((b) => (b.id === bookingId ? { ...b, status: newStatus } : b))
-      );
-      return;
-    }
     if (!session) return;
     const { error } = await supabase
       .from('bookings')
@@ -1526,55 +1048,34 @@ export default function App() {
   };
 
   const deleteBooking = async (bookingId) => {
-    if (isDemoAdmin && !session) {
-      setBookings((prev) => prev.filter((b) => b.id !== bookingId));
-      setDeleteConfirmId(null);
-      return;
-    }
     if (!session) return;
     const { error } = await supabase.from('bookings').delete().eq('id', bookingId);
     if (error) console.error('Error deleting booking:', error);
-    setDeleteConfirmId(null);
     loadBookings();
     loadTakenSlots();
   };
 
   const handleManualBlockSlot = async (dateToBlock, slotToBlock) => {
-    const blockDetails = {
-      carMakeModel: 'Telefon-Buchung / Blockiert',
-      carYear: '2026',
-      bodyTier: 'compact',
-      dirtLevel: 'normal',
-      addons: [],
-      totalPrice: 0,
-      location: { street: 'Manuelle Reservierung', plz: '8000', city: 'Zürich' },
-      client: {
-        name: 'Inhaber Blockierung',
-        phone: '+41 79 000 00 00',
-        email: '',
-        notes: 'Manuell vom Inhaber reserviert'
-      }
-    };
-    if (isDemoAdmin && !session) {
-      setBookings((prev) => [
-        {
-          id: 'block-' + Date.now(),
-          status: 'confirmed',
-          date: dateToBlock,
-          slot: slotToBlock,
-          createdAt: Date.now(),
-          ...blockDetails
-        },
-        ...prev
-      ]);
-      return;
-    }
     if (!session) return;
     const { error } = await supabase.from('bookings').insert({
       status: 'confirmed',
       date: dateToBlock,
       slot: slotToBlock,
-      details: blockDetails
+      details: {
+        carMakeModel: 'Telefon-Buchung / Blockiert',
+        carYear: '2026',
+        bodyTier: 'compact',
+        dirtLevel: 'normal',
+        addons: [],
+        totalPrice: 0,
+        location: { street: 'Manuelle Reservierung', plz: '8000', city: 'Zürich' },
+        client: {
+          name: 'Inhaber Blockierung',
+          phone: '+41 79 000 00 00',
+          email: '',
+          notes: 'Manuell vom Inhaber reserviert'
+        }
+      }
     });
     if (error) console.error('Error blocking slot:', error);
     loadBookings();
@@ -1589,7 +1090,7 @@ export default function App() {
       password: pinInput
     });
     if (error) {
-      setPinError('Помилка входу Supabase (або натисніть Тест-режим нижче для прев’ю)');
+      setPinError('Login fehlgeschlagen / Login failed');
       return;
     }
     setIsAdminMode(true);
@@ -1598,80 +1099,26 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const enterDemoOwnerApp = () => {
-    setIsDemoAdmin(true);
-    setIsAdminMode(true);
-    setShowPinModal(false);
-    if (bookings.length === 0) {
-      setBookings(INITIAL_DEMO_BOOKINGS);
-    }
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  // Swiss numbers: +41 79 ..., 079 ..., 0041 79 ... -> 4179...
+  const normalizePhone = (raw) => {
+    let d = String(raw || '').replace(/\D/g, '');
+    if (d.startsWith('00')) d = d.slice(2);
+    if (d.startsWith('410')) d = '41' + d.slice(3);
+    else if (d.startsWith('0')) d = '41' + d.slice(1);
+    return d;
   };
-
-  // --- WHATSAPP COMMUNICATION TEMPLATES (DE / EN) ---
-  const generateWhatsAppMessage = (b, tplType = 'confirm', msgLang = 'de') => {
-    if (!b) return '';
+  // Opens WhatsApp on the owner's phone with a ready-made text; the owner just taps "Send".
+  const buildWhatsAppLink = (b, kind = 'confirm') => {
     const name = b.client?.name || '';
-    const car = `${b.carMakeModel || ''} ${b.carYear ? `(${b.carYear})` : ''}`.trim();
-    const addr = `${b.location?.street || ''}, ${b.location?.plz || ''} ${b.location?.city || ''}`.trim();
-    const price = b.finalPrice != null ? b.finalPrice : b.totalPrice;
-
-    if (msgLang === 'en') {
-      if (tplType === 'confirm') {
-        return `Hello ${name}! This is ZüriGlanz Mobile Detailing ✨\n\nYour appointment is officially CONFIRMED:\n📅 Date: ${b.date}\n⏰ Time: ${b.slot}\n📍 Address: ${addr}\n🚗 Vehicle: ${car}\n💳 Estimated Total: ${price} CHF\n\nPlease make sure the parking space next to your car and a power outlet (within 30m) are accessible. See you soon!`;
-      }
-      if (tplType === 'onway') {
-        return `Hello ${name}! 🚗💨 I am now on my way to your location (${addr}) for your ${car} detailing. I will arrive in approx. 15–20 minutes. Best regards, ZüriGlanz`;
-      }
-      if (tplType === 'done') {
-        return `Hello ${name}! ✨ Your ${car} is now completely detailed and ready! Total amount: ${price} CHF (payable via Twint or Cash). Thank you for choosing ZüriGlanz Mobile Detailing!`;
-      }
-      if (tplType === 'decline') {
-        return `Hello ${name}, thank you for your booking request at ZüriGlanz Mobile Detailing. Unfortunately, the requested slot on ${b.date} (${b.slot}) is no longer available. Would another day work for you? Best regards!`;
-      }
-    }
-
-    // Default German (DE)
-    if (tplType === 'confirm') {
-      return `Grüezi ${name}! Hier ist ZüriGlanz Mobile Detailing ✨\n\nIhr Termin ist hiermit offiziell BESTÄTIGT:\n📅 Datum: ${b.date}\n⏰ Zeitfenster: ${b.slot} Uhr\n📍 Adresse: ${addr}\n🚗 Fahrzeug: ${car}\n💳 Richtpreis: ${price} CHF\n\nBitte halten Sie den Parkplatz neben Ihrem Fahrzeug sowie den Stromanschluss (max. 30m) frei. Bis bald!`;
-    }
-    if (tplType === 'onway') {
-      return `Grüezi ${name}! 🚗💨 Ich bin jetzt auf dem Weg zu Ihnen (${addr}) für die Aufbereitung Ihres ${car} und in ca. 15–20 Minuten vor Ort. Bis gleich! ZüriGlanz`;
-    }
-    if (tplType === 'done') {
-      return `Grüezi ${name}! ✨ Ihr ${car} ist fertig aufbereitet und glänzt wie neu! Der Gesamtbetrag liegt bei ${price} CHF (Zahlung gerne bequem per Twint oder Bar). Herzlichen Dank für Ihr Vertrauen! ZüriGlanz`;
-    }
-    if (tplType === 'decline') {
-      return `Grüezi ${name}, vielen Dank für Ihre Anfrage bei ZüriGlanz Mobile Detailing. Leider können wir den gewünschten Termin am ${b.date} (${b.slot} Uhr) nicht wahrnehmen. Dürfen wir Ihnen einen alternativen Termin vorschlagen? Beste Grüsse!`;
-    }
-    return '';
-  };
-
-  // Open WhatsApp composer modal for a booking
-  const openWhatsAppComposer = (b, defaultType = 'confirm') => {
-    setActiveWhatsAppBooking(b);
-    setWaTemplateType(defaultType);
-    setWaCustomText(generateWhatsAppMessage(b, defaultType, waLang));
-  };
-
-  useEffect(() => {
-    if (activeWhatsAppBooking) {
-      setWaCustomText(generateWhatsAppMessage(activeWhatsAppBooking, waTemplateType, waLang));
-    }
-  }, [waTemplateType, waLang, activeWhatsAppBooking]);
-
-  const sendWhatsAppNow = async (andConfirmStatus = false) => {
-    if (!activeWhatsAppBooking) return;
-    if (andConfirmStatus && activeWhatsAppBooking.status !== 'confirmed') {
-      await updateBookingStatus(activeWhatsAppBooking.id, 'confirmed');
-    }
-    if (waTemplateType === 'decline' && activeWhatsAppBooking.status !== 'declined') {
-      await updateBookingStatus(activeWhatsAppBooking.id, 'declined');
-    }
-    const cleanPhone = (activeWhatsAppBooking.client?.phone || '').replace(/\D/g, '');
-    const waUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(waCustomText)}`;
-    window.open(waUrl, '_blank', 'noopener,noreferrer');
-    setActiveWhatsAppBooking(null);
+    const addr = `${b.location?.street}, ${b.location?.plz} ${b.location?.city}`;
+    const car = b.carMakeModel || 'Fahrzeug';
+    const messages = {
+      confirm: `Grüezi ${name}! Hier ist ZüriGlanz Mobile Detailing. Ihr Termin am ${b.date} (${b.slot} Uhr) an der Adresse ${addr} für Ihren ${car} (Richtpreis: ${b.totalPrice} CHF) ist hiermit offiziell BESTÄTIGT. Bis bald!`,
+      reminder: `Grüezi ${name}! Kurze Erinnerung von ZüriGlanz: Wir kommen am ${b.date} (${b.slot} Uhr) zu ${addr} für Ihren ${car}. Bitte stellen Sie sicher, dass das Fahrzeug zugänglich ist und eine Steckdose in max. 30 m erreichbar ist. Bis bald!`,
+      decline: `Grüezi ${name}! Leider können wir Ihren Wunschtermin am ${b.date} (${b.slot} Uhr) nicht bestätigen. Gerne schlagen wir Ihnen einen alternativen Termin vor – bitte antworten Sie kurz auf diese Nachricht. Freundliche Grüsse, ZüriGlanz Mobile Detailing`,
+      thanks: `Vielen Dank, ${name}, für Ihr Vertrauen! Wir hoffen, Sie sind mit Ihrem ${car} zufrieden. Über eine kurze Rückmeldung oder Weiterempfehlung freuen wir uns sehr. Freundliche Grüsse, ZüriGlanz Mobile Detailing`
+    };
+    return `https://wa.me/${normalizePhone(b.client?.phone)}?text=${encodeURIComponent(messages[kind])}`;
   };
 
   const resetWizard = () => {
@@ -1696,16 +1143,70 @@ export default function App() {
     return bookings.filter((b) => b.status === adminFilter);
   }, [bookings, adminFilter]);
 
-  const pendingCount = useMemo(
-    () => bookings.filter((b) => b.status === 'pending').length,
-    [bookings]
-  );
+  const confirmedRevenue = useMemo(() => {
+    return bookings
+      .filter((b) => b.status === 'confirmed')
+      .reduce((acc, item) => acc + (Number(item.totalPrice) || 0), 0);
+  }, [bookings]);
+
+  // --- NEW ORDER ALERTS (work while the owner app is open or recently in background) ---
+  const notifyNewBookings = async (items) => {
+    const text = items
+      .map((b) => `${b.client?.name || '—'} · ${b.date} ${b.slot}`)
+      .join('\n');
+    setNewBookingBanner(
+      items.length === 1 ? `Нове замовлення: ${text}` : `Нових замовлень: ${items.length}`
+    );
+    try {
+      if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    } catch (e) {}
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : null;
+        const opts = {
+          body: text,
+          icon: '/icon-192.png',
+          tag: 'new-booking',
+          renotify: true,
+          data: { url: '/?admin=1' }
+        };
+        if (reg) reg.showNotification('ZüriGlanz · нове замовлення', opts);
+        else new Notification('ZüriGlanz · нове замовлення', opts);
+      }
+    } catch (e) {
+      console.error('Notification error', e);
+    }
+  };
+  const enableNotifications = async () => {
+    if (typeof Notification === 'undefined') {
+      setNotifPermission('unsupported');
+      return;
+    }
+    const result = await Notification.requestPermission();
+    setNotifPermission(result);
+  };
+  useEffect(() => {
+    const n = bookings.filter((b) => b.status === 'pending').length;
+    if (isAdminMode) {
+      document.title = n > 0 ? `(${n}) ZüriGlanz Кабінет` : 'ZüriGlanz Кабінет';
+      try {
+        if (n > 0 && navigator.setAppBadge) navigator.setAppBadge(n);
+        else if (navigator.clearAppBadge) navigator.clearAppBadge();
+      } catch (e) {}
+    } else {
+      document.title = 'ZüriGlanz – Mobile Autoaufbereitung Zürich';
+      try {
+        if (navigator.clearAppBadge) navigator.clearAppBadge();
+      } catch (e) {}
+    }
+  }, [bookings, isAdminMode]);
 
   // =====================  ACCOUNTING (owner only)  =====================
+  const [adminTab, setAdminTab] = useState('bookings');
   const [expenses, setExpenses] = useState([]);
   const [costPerKm, setCostPerKm] = useState(0.7);
   const [accountingError, setAccountingError] = useState('');
-  const [accMonth, setAccMonth] = useState(localDateStr().slice(0, 7));
+  const [accMonth, setAccMonth] = useState(localDateStr().slice(0, 7)); // 'YYYY-MM' or 'all'
   const emptyExpense = () => ({
     date: localDateStr(),
     category: 'Матеріали',
@@ -1717,7 +1218,6 @@ export default function App() {
   const [expForm, setExpForm] = useState(emptyExpense());
 
   const loadAccounting = async () => {
-    if (isDemoAdmin && !session) return;
     const [exp, set] = await Promise.all([
       supabase.from('expenses').select('*').order('expense_date', { ascending: false }),
       supabase.from('settings').select('cost_per_km').eq('id', 1).maybeSingle()
@@ -1733,11 +1233,10 @@ export default function App() {
     setExpenses(exp.data || []);
     if (set.data) setCostPerKm(Number(set.data.cost_per_km));
   };
-
   useEffect(() => {
     if (session) loadAccounting();
-    else if (!isDemoAdmin) setExpenses([]);
-  }, [session, isDemoAdmin]);
+    else setExpenses([]);
+  }, [session]);
 
   const estimateKm = (b) =>
     Math.round(2 * Number(b.location?.distKmFromBase || 0) * 1.3 * 10) / 10;
@@ -1804,22 +1303,6 @@ export default function App() {
         );
 
   const saveJobField = async (id, patch) => {
-    if (isDemoAdmin && !session) {
-      setBookings((prev) =>
-        prev.map((b) => {
-          if (b.id !== id) return b;
-          return {
-            ...b,
-            finalPrice: patch.final_price !== undefined ? patch.final_price : b.finalPrice,
-            kmDriven: patch.km_driven !== undefined ? patch.km_driven : b.kmDriven,
-            paymentMethod: patch.payment_method !== undefined ? (patch.payment_method || '') : b.paymentMethod,
-            internalNotes: patch.internal_notes !== undefined ? (patch.internal_notes || '') : b.internalNotes,
-            paid: patch.paid !== undefined ? patch.paid : b.paid
-          };
-        })
-      );
-      return;
-    }
     const { error } = await supabase.from('bookings').update(patch).eq('id', id);
     if (error) {
       console.error(error);
@@ -1837,23 +1320,6 @@ export default function App() {
     const amount = parseNum(expForm.amount);
     if (!expForm.description.trim() || amount === null || amount < 0) {
       setAccountingError('Заповніть опис і суму (число, наприклад 24.90).');
-      return;
-    }
-    if (isDemoAdmin && !session) {
-      setExpenses((prev) => [
-        {
-          id: 'exp-' + Date.now(),
-          expense_date: expForm.date,
-          category: expForm.category,
-          description: expForm.description.trim(),
-          supplier: expForm.supplier.trim() || null,
-          amount_chf: amount,
-          booking_id: expForm.bookingId || null
-        },
-        ...prev
-      ]);
-      setAccountingError('');
-      setExpForm({ ...emptyExpense(), date: expForm.date, category: expForm.category });
       return;
     }
     const { error } = await supabase.from('expenses').insert({
@@ -1875,10 +1341,7 @@ export default function App() {
   };
 
   const deleteExpense = async (id) => {
-    if (isDemoAdmin && !session) {
-      setExpenses((prev) => prev.filter((x) => x.id !== id));
-      return;
-    }
+    if (!window.confirm('Видалити цю витрату?')) return;
     const { error } = await supabase.from('expenses').delete().eq('id', id);
     if (error) setAccountingError('Не вдалося видалити: ' + error.message);
     loadAccounting();
@@ -1887,10 +1350,6 @@ export default function App() {
   const saveCostPerKm = async (value) => {
     const n = parseNum(value);
     if (n === null || n < 0 || n === costPerKm) return;
-    if (isDemoAdmin && !session) {
-      setCostPerKm(n);
-      return;
-    }
     const { error } = await supabase.from('settings').update({ cost_per_km: n }).eq('id', 1);
     if (error) setAccountingError('Не вдалося зберегти ставку: ' + error.message);
     else setCostPerKm(n);
@@ -1919,7 +1378,6 @@ export default function App() {
         j.b.internalNotes
       ])
     ]);
-
   const exportExpensesCsv = () =>
     downloadCsv(`zuriglanz-vytraty-${accMonth}.csv`, [
       ['Дата', 'Категорія', 'Опис', 'Постачальник', 'Сума CHF', 'Замовлення'],
@@ -1929,1133 +1387,271 @@ export default function App() {
       })
     ]);
 
-  const simulateIncomingBooking = () => {
-    const sim = {
-      id: 'sim-' + Math.floor(1000 + Math.random() * 9000),
-      status: 'pending',
-      date: getDefaultDate(),
-      slot: '14:00 - 18:00',
-      createdAt: Date.now(),
-      kmDriven: null,
-      finalPrice: null,
-      paid: false,
-      paymentMethod: '',
-      internalNotes: '',
-      carMakeModel: 'Porsche Macan',
-      carYear: '2024',
-      bodyTier: 'suv',
-      dirtLevel: 'normal',
-      addons: ['extractor', 'polish'],
-      totalPrice: 275,
-      location: {
-        street: 'Bahnhofstrasse 19',
-        plz: '8180',
-        city: 'Bülach',
-        distKmFromBase: 18.7
-      },
-      client: {
-        name: 'Lukas Brunner',
-        phone: '+41 79 888 77 66',
-        email: 'l.brunner@bluewin.ch',
-        notes: 'Bitte kurz anrufen bei Ankunft, Schranke wird geöffnet.'
-      }
-    };
-    setBookings((prev) => [sim, ...prev]);
-    triggerNewBookingAlert(sim);
-  };
-
   const inputCls =
-    'w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-400';
+    'w-full bg-slate-900 border border-slate-600 rounded-lg px-2.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-400';
 
-  // =========================================================================
-  // FULL-SCREEN ANDROID OWNER APP INTERFACE
-  // =========================================================================
-  if (isAdminMode) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-white font-sans pb-24 select-none">
-        {/* LIVE ANDROID HEADS-UP NOTIFICATION BANNER */}
-        {liveAlertBooking && (
-          <div className="fixed top-3 inset-x-3 z-50 bg-emerald-950/95 border-2 border-emerald-400 rounded-2xl p-4 shadow-2xl backdrop-blur-md animate-bounce">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-xl bg-emerald-500 text-slate-950 flex items-center justify-center shrink-0">
-                  <BellRing className="w-6 h-6" />
-                </div>
+  const renderAccounting = () => (
+    <div className="space-y-6">
+      {accountingError && (
+        <div className="bg-amber-500/10 border border-amber-500/40 text-amber-200 text-sm rounded-xl px-4 py-3">
+          {accountingError}
+        </div>
+      )}
+
+      {/* Period + settings + export */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <button onClick={() => shiftMonth(-1)} className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 text-sm font-bold">‹</button>
+          <div className="min-w-[10rem] text-center font-bold capitalize">{monthLabel}</div>
+          <button onClick={() => shiftMonth(1)} className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 text-sm font-bold">›</button>
+          <button
+            onClick={() => setAccMonth(accMonth === 'all' ? localDateStr().slice(0, 7) : 'all')}
+            className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 text-xs font-bold"
+          >
+            {accMonth === 'all' ? 'Поточний місяць' : 'Весь період'}
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <label className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5">
+            <span className="text-slate-400">Вартість 1 км (CHF)</span>
+            <input
+              key={`cpk-${costPerKm}`}
+              defaultValue={costPerKm}
+              inputMode="decimal"
+              onBlur={(e) => saveCostPerKm(e.target.value)}
+              className="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white text-center"
+            />
+          </label>
+          <button onClick={exportJobsCsv} className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700">CSV: замовлення</button>
+          <button onClick={exportExpensesCsv} className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700">CSV: витрати</button>
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 text-xs">
+        {[
+          { label: 'Дохід', value: `${chf(accounting.revenue)} CHF`, cls: 'text-white' },
+          { label: `Дорога (${Math.round(accounting.km)} км)`, value: `− ${chf(accounting.travel)} CHF`, cls: 'text-amber-300' },
+          { label: 'Матеріали й витрати', value: `− ${chf(accounting.expensesTotal)} CHF`, cls: 'text-amber-300' },
+          { label: 'Чистий прибуток', value: `${chf(accounting.profit)} CHF`, cls: accounting.profit >= 0 ? 'text-emerald-400' : 'text-red-400' },
+          { label: 'Замовлень', value: accounting.jobs.length, cls: 'text-white' },
+          { label: 'Ще не оплачено', value: `${chf(accounting.unpaid)} CHF`, cls: accounting.unpaid > 0 ? 'text-sky-300' : 'text-white' }
+        ].map((c) => (
+          <div key={c.label} className="bg-slate-800 px-4 py-3 rounded-xl border border-slate-700">
+            <span className="text-slate-400 block">{c.label}</span>
+            <span className={`text-lg font-extrabold ${c.cls}`}>{c.value}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Jobs */}
+      <div className="space-y-3">
+        <h3 className="font-bold text-lg">Підтверджені замовлення</h3>
+        <p className="text-xs text-slate-400">
+          Після роботи впиши фактичні км (туди-назад) і суму, що ти отримав. Якщо поле км порожнє, береться орієнтовне значення (сіре). Зміни зберігаються автоматично, коли виходиш з поля.
+        </p>
+        {accounting.jobs.length === 0 ? (
+          <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-6 text-center text-slate-400 text-sm">
+            У цьому періоді немає підтверджених замовлень.
+          </div>
+        ) : (
+          accounting.jobs.map((j) => (
+            <div key={j.b.id} className="bg-slate-800 border border-slate-700 rounded-xl p-4 space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
-                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-300 block">
-                    Нове бронювання щойно надійшло!
-                  </span>
-                  <h4 className="font-extrabold text-base text-white">
-                    {liveAlertBooking.carMakeModel} · {liveAlertBooking.totalPrice} CHF
-                  </h4>
-                  <p className="text-xs text-emerald-100">
-                    {liveAlertBooking.date} ({liveAlertBooking.slot}) · {liveAlertBooking.client?.name} ({liveAlertBooking.location?.city})
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setLiveAlertBooking(null)}
-                className="p-1.5 text-emerald-300 hover:text-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-2 mt-3">
-              <button
-                onClick={() => {
-                  const b = liveAlertBooking;
-                  setLiveAlertBooking(null);
-                  setAndroidTab('inbox');
-                  openWhatsAppComposer(b, 'confirm');
-                }}
-                className="py-2.5 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5"
-              >
-                <MessageCircle className="w-4 h-4" />
-                <span>Підтвердити у WhatsApp</span>
-              </button>
-              <button
-                onClick={() => {
-                  setLiveAlertBooking(null);
-                  setAndroidTab('inbox');
-                }}
-                className="py-2.5 px-3 rounded-xl bg-slate-800 text-white font-bold text-xs"
-              >
-                Переглянути в списку
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* WHATSAPP COMPOSER MODAL (BOTTOM SHEET FOR ANDROID) */}
-        {activeWhatsAppBooking && (
-          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-            <div className="bg-slate-900 border-t sm:border border-slate-700 rounded-t-3xl sm:rounded-3xl max-w-lg w-full p-5 sm:p-6 space-y-4 shadow-2xl max-h-[92vh] overflow-y-auto">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center">
-                    <MessageCircle className="w-5 h-5" />
+                  <div className="font-bold">
+                    {j.b.date} · {j.b.slot} · {j.b.client?.name || '—'}
                   </div>
-                  <div>
-                    <h3 className="font-extrabold text-base text-white">
-                      WhatsApp клієнту · {activeWhatsAppBooking.client?.name}
-                    </h3>
-                    <p className="text-xs text-slate-400 font-mono">
-                      {activeWhatsAppBooking.client?.phone}
-                    </p>
+                  <div className="text-xs text-slate-400">
+                    {j.b.carMakeModel} {j.b.carYear ? `(${j.b.carYear})` : ''} · {j.b.location?.street}, {j.b.location?.plz} {j.b.location?.city}
                   </div>
                 </div>
-                <button
-                  onClick={() => setActiveWhatsAppBooking(null)}
-                  className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Language & Template Selector */}
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1 bg-slate-800 p-1 rounded-xl border border-slate-700 text-xs">
-                  {[
-                    { id: 'de', label: '🇨🇭 Deutsch' },
-                    { id: 'en', label: '🇬🇧 English' }
-                  ].map((l) => (
-                    <button
-                      key={l.id}
-                      type="button"
-                      onClick={() => setWaLang(l.id)}
-                      className={`px-3 py-1.5 rounded-lg font-bold transition ${
-                        waLang === l.id ? 'bg-white text-slate-950' : 'text-slate-400'
-                      }`}
-                    >
-                      {l.label}
-                    </button>
-                  ))}
+                <div className="text-right text-xs">
+                  <div className="text-slate-400">
+                    Дорога {chf(j.travel)} · Матеріали {chf(j.materials)}
+                  </div>
+                  <div className={`text-base font-extrabold ${j.profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    Прибуток {chf(j.profit)} CHF
+                  </div>
                 </div>
-                <span className="text-xs text-slate-400">
-                  {activeWhatsAppBooking.date} · {activeWhatsAppBooking.slot}
-                </span>
               </div>
-
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                {[
-                  { id: 'confirm', label: '✅ Підтвердження броні' },
-                  { id: 'onway', label: '🚗 Виїжджаю (15-20 хв)' },
-                  { id: 'done', label: '✨ Авто готове + Оплата' },
-                  { id: 'decline', label: '❌ Перенесення / Відмова' }
-                ].map((tpl) => (
-                  <button
-                    key={tpl.id}
-                    type="button"
-                    onClick={() => setWaTemplateType(tpl.id)}
-                    className={`p-2.5 rounded-xl border text-left font-bold transition ${
-                      waTemplateType === tpl.id
-                        ? 'border-emerald-500 bg-emerald-500/15 text-emerald-300'
-                        : 'border-slate-700 bg-slate-800/70 text-slate-300'
-                    }`}
-                  >
-                    {tpl.label}
-                  </button>
-                ))}
-              </div>
-
-              <div>
-                <label className="text-xs text-slate-400 font-semibold block mb-1.5">
-                  Текст повідомлення (можна відредагувати перед відправкою):
-                </label>
-                <textarea
-                  rows={6}
-                  value={waCustomText}
-                  onChange={(e) => setWaCustomText(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs sm:text-sm text-white focus:outline-none focus:border-emerald-400 leading-relaxed"
-                />
-              </div>
-
-              <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
-                {waTemplateType === 'confirm' && activeWhatsAppBooking.status !== 'confirmed' && (
-                  <button
-                    type="button"
-                    onClick={() => sendWhatsAppNow(true)}
-                    className="flex-1 py-3.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-950"
-                  >
-                    <CheckCheck className="w-5 h-5" />
-                    <span>Підтвердити в базі + Відкрити WhatsApp</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => sendWhatsAppNow(false)}
-                  className="flex-1 py-3.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-white font-bold text-sm flex items-center justify-center gap-2"
-                >
-                  <Send className="w-4 h-4 text-emerald-400" />
-                  <span>Відправити у WhatsApp</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ANDROID APP TOP STATUS BAR */}
-        <header className="sticky top-0 z-40 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-4 py-3">
-          <div className="max-w-2xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-[#D52B1E] flex items-center justify-center text-white font-extrabold shadow-sm">
-                ZG
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-extrabold text-sm sm:text-base tracking-tight">
-                    ZüriGlanz Android
-                  </span>
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                </div>
-                <p className="text-[11px] text-slate-400">
-                  {isDemoAdmin && !session ? 'Демо-режим прев’ю' : 'Supabase Live підключено'}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={simulateIncomingBooking}
-                title="Тест нового замовлення"
-                className="px-2.5 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold flex items-center gap-1 hover:bg-emerald-500/25"
-              >
-                <BellRing className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Тест пушу</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  loadBookings(false);
-                  loadAccounting();
-                }}
-                className="p-2 rounded-xl bg-slate-800 text-slate-300 hover:text-white border border-slate-700"
-                title="Оновити"
-              >
-                <RefreshCw className="w-4 h-4" />
-              </button>
-
-              <button
-                onClick={() => setIsAdminMode(false)}
-                className="px-2.5 py-1.5 rounded-xl bg-slate-800 text-slate-300 hover:text-white border border-slate-700 text-xs font-semibold flex items-center gap-1"
-                title="На сайт для клієнтів"
-              >
-                <Globe className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Сайт</span>
-              </button>
-            </div>
-          </div>
-        </header>
-
-        {/* ANDROID APP MAIN BODY */}
-        <main className="max-w-2xl mx-auto px-4 pt-4 space-y-4">
-          {accountingError && (
-            <div className="bg-amber-500/10 border border-amber-500/40 text-amber-200 text-xs rounded-xl px-4 py-3">
-              {accountingError}
-            </div>
-          )}
-
-          {/* TAB 1: INBOX & BOOKINGS */}
-          {androidTab === 'inbox' && (
-            <div className="space-y-4">
-              {/* Quick KPI Strip */}
-              <div className="grid grid-cols-3 gap-2.5">
-                <button
-                  onClick={() => setAdminFilter('pending')}
-                  className={`p-3 rounded-2xl border text-left transition ${
-                    adminFilter === 'pending'
-                      ? 'bg-amber-500/20 border-amber-400'
-                      : 'bg-slate-900 border-slate-800'
-                  }`}
-                >
-                  <span className="text-[11px] text-slate-400 block">Нові заявки</span>
-                  <span className="text-2xl font-extrabold text-amber-400">{pendingCount}</span>
-                </button>
-                <button
-                  onClick={() => setAdminFilter('confirmed')}
-                  className={`p-3 rounded-2xl border text-left transition ${
-                    adminFilter === 'confirmed'
-                      ? 'bg-emerald-500/20 border-emerald-400'
-                      : 'bg-slate-900 border-slate-800'
-                  }`}
-                >
-                  <span className="text-[11px] text-slate-400 block">Підтверджено</span>
-                  <span className="text-2xl font-extrabold text-emerald-400">
-                    {bookings.filter((b) => b.status === 'confirmed').length}
-                  </span>
-                </button>
-                <button
-                  onClick={() => setAndroidTab('finance')}
-                  className="p-3 rounded-2xl bg-slate-900 border border-slate-800 text-left"
-                >
-                  <span className="text-[11px] text-slate-400 block">Прибуток (міс.)</span>
-                  <span className="text-lg font-extrabold text-white">
-                    {Math.round(accounting.profit)} CHF
-                  </span>
-                </button>
-              </div>
-
-              {/* Filter Pills */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-                {[
-                  { id: 'all', label: `Всі (${bookings.length})` },
-                  { id: 'pending', label: `Очікують (${pendingCount})` },
-                  {
-                    id: 'confirmed',
-                    label: `Підтверджені (${bookings.filter((b) => b.status === 'confirmed').length})`
-                  },
-                  {
-                    id: 'declined',
-                    label: `Відхилені (${bookings.filter((b) => b.status === 'declined').length})`
-                  }
-                ].map((tab) => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setAdminFilter(tab.id)}
-                    className={`px-3.5 py-2 rounded-xl text-xs font-extrabold whitespace-nowrap transition ${
-                      adminFilter === tab.id
-                        ? 'bg-white text-slate-950'
-                        : 'bg-slate-900 text-slate-400 border border-slate-800'
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* Quick Slot Blocker Bar */}
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-slate-400" />
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+                <label className="space-y-1">
+                  <span className="text-slate-400">Сума, CHF</span>
                   <input
-                    type="date"
-                    value={selectedDate}
-                    onChange={(e) => setSelectedDate(e.target.value)}
-                    className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-bold text-white"
+                    key={`${j.b.id}-price-${j.b.finalPrice ?? ''}`}
+                    defaultValue={j.b.finalPrice ?? ''}
+                    placeholder={String(j.price)}
+                    inputMode="decimal"
+                    onBlur={(e) => {
+                      const v = e.target.value.trim() === '' ? null : parseNum(e.target.value);
+                      if (v !== (j.b.finalPrice != null ? Number(j.b.finalPrice) : null)) saveJobField(j.b.id, { final_price: v });
+                    }}
+                    className={inputCls}
                   />
-                </div>
-                <div className="flex items-center gap-1.5 text-xs">
-                  <button
-                    onClick={() => handleManualBlockSlot(selectedDate, '08:00 - 12:00')}
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 font-semibold text-emerald-300"
-                  >
-                    + Блок 08–12
-                  </button>
-                  <button
-                    onClick={() => handleManualBlockSlot(selectedDate, '14:00 - 18:00')}
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 font-semibold text-sky-300"
-                  >
-                    + Блок 14–18
-                  </button>
-                </div>
-              </div>
-
-              {/* Booking Cards */}
-              {filteredBookings.length === 0 ? (
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-400 text-sm">
-                  Немає бронювань у цій категорії.
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {filteredBookings.map((b) => (
-                    <div
-                      key={b.id}
-                      className={`bg-slate-900 rounded-2xl p-4 border space-y-3.5 ${
-                        b.status === 'pending'
-                          ? 'border-amber-500/60 shadow-lg shadow-amber-950/20'
-                          : 'border-slate-800'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <span
-                            className={`inline-block text-[11px] font-extrabold px-2.5 py-0.5 rounded-full mb-1.5 ${
-                              b.status === 'confirmed'
-                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                                : b.status === 'declined'
-                                ? 'bg-red-500/20 text-red-300 border border-red-500/30'
-                                : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                            }`}
-                          >
-                            {b.status === 'confirmed'
-                              ? '✓ Підтверджено'
-                              : b.status === 'declined'
-                              ? '✕ Відхилено'
-                              : '⏳ Очікує підтвердження'}
-                          </span>
-                          <h3 className="font-extrabold text-base text-white">
-                            {b.carMakeModel} {b.carYear ? `(${b.carYear})` : ''}
-                          </h3>
-                          <p className="text-xs text-emerald-400 font-bold">
-                            📅 {b.date} · ⏰ {b.slot}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-xl font-extrabold text-white">
-                            {jobPrice(b)} CHF
-                          </span>
-                          {b.paid && (
-                            <span className="block text-[10px] font-extrabold text-emerald-400 uppercase">
-                              ✓ Оплачено ({b.paymentMethod || 'Twint'})
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Address + Google Maps Navigation Button */}
-                      <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
-                        <div className="text-xs">
-                          <div className="font-bold text-white">
-                            {b.location?.street}, {b.location?.plz} {b.location?.city}
-                          </div>
-                          {b.location?.distKmFromBase != null && (
-                            <div className="text-slate-400 mt-0.5">
-                              Відстань: ~{b.location.distKmFromBase} км в один бік (≈ {estimateKm(b)} км туди-назад)
-                            </div>
-                          )}
-                        </div>
-                        <a
-                          href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
-                            `${b.location?.street}, ${b.location?.plz} ${b.location?.city}, Switzerland`
-                          )}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="px-3 py-2 rounded-xl bg-sky-500/20 border border-sky-500/30 text-sky-300 font-bold text-xs flex items-center gap-1.5 shrink-0"
-                        >
-                          <Navigation className="w-4 h-4" />
-                          <span>Маршрут</span>
-                        </a>
-                      </div>
-
-                      {/* Client + Addons + Notes */}
-                      <div className="text-xs space-y-1.5 text-slate-300">
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-white">{b.client?.name}</span>
-                          <a
-                            href={`tel:${b.client?.phone}`}
-                            className="text-emerald-400 font-mono font-bold underline flex items-center gap-1"
-                          >
-                            <Phone className="w-3.5 h-3.5" />
-                            {b.client?.phone}
-                          </a>
-                        </div>
-                        <div>
-                          <span className="text-slate-400">Опції: </span>
-                          <span className="font-semibold text-white">
-                            {b.addons?.length ? b.addons.join(', ') : 'Базовий пакет (150 CHF)'}
-                          </span>
-                        </div>
-                        {b.client?.notes && (
-                          <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200">
-                            <strong>Побажання клієнта:</strong> {b.client.notes}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Primary Action Buttons */}
-                      <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800">
-                        <button
-                          type="button"
-                          onClick={() => openWhatsAppComposer(b, 'confirm')}
-                          className="col-span-2 py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md"
-                        >
-                          <MessageCircle className="w-4 h-4" />
-                          <span>
-                            {b.status === 'confirmed'
-                              ? 'Написати клієнту у WhatsApp (Шаблони)'
-                              : 'Підтвердити бронь + Відправити WhatsApp'}
-                          </span>
-                        </button>
-
-                        {b.status !== 'confirmed' && (
-                          <button
-                            type="button"
-                            onClick={() => updateBookingStatus(b.id, 'confirmed')}
-                            className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1"
-                          >
-                            <Check className="w-4 h-4" />
-                            <span>Підтвердити без WA</span>
-                          </button>
-                        )}
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingJobId(b.id);
-                            setAndroidTab('jobs');
-                          }}
-                          className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-300 font-bold text-xs flex items-center justify-center gap-1"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                          <span>Внести км / оплату</span>
-                        </button>
-
-                        {b.status !== 'declined' && (
-                          <button
-                            type="button"
-                            onClick={() => openWhatsAppComposer(b, 'decline')}
-                            className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-amber-950 text-amber-300 font-bold text-xs flex items-center justify-center gap-1"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                            <span>Відхилити</span>
-                          </button>
-                        )}
-
-                        {deleteConfirmId === b.id ? (
-                          <button
-                            type="button"
-                            onClick={() => deleteBooking(b.id)}
-                            className="py-2.5 px-3 rounded-xl bg-red-600 text-white font-extrabold text-xs"
-                          >
-                            Підтвердити видалення?
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setDeleteConfirmId(b.id)}
-                            className="py-2.5 px-3 rounded-xl bg-slate-800/60 text-slate-400 hover:text-red-400 font-semibold text-xs"
-                          >
-                            Видалити
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB 2: JOBS DETAILS (DISTANCE, FINAL PRICE, PAYMENT METHOD, NOTES) */}
-          {androidTab === 'jobs' && (
-            <div className="space-y-4">
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-                <h2 className="font-extrabold text-base">Робочий журнал замовлень</h2>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Вводь фактичну суму, кілометраж туди-назад та тип оплати (Twint, Готівка тощо). Усі зміни миттєво зберігаються в базу даних Supabase.
-                </p>
-              </div>
-
-              {bookings.filter((b) => b.status === 'confirmed').length === 0 ? (
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-400 text-sm">
-                  Ще немає підтверджених замовлень. Спочатку підтвердь заявку у вкладці «Заявки».
-                </div>
-              ) : (
-                bookings
-                  .filter((b) => b.status === 'confirmed')
-                  .map((b) => {
-                    const est = estimateKm(b);
-                    const curKm = jobKm(b);
-                    const curPrice = jobPrice(b);
-                    const travelChf = Math.round(curKm * costPerKm * 100) / 100;
-                    const matChf = expenses
-                      .filter((e) => e.booking_id === b.id)
-                      .reduce((s, e) => s + Number(e.amount_chf || 0), 0);
-                    const netProfit = curPrice - travelChf - matChf;
-
-                    return (
-                      <div
-                        key={b.id}
-                        className={`bg-slate-900 rounded-2xl p-4 border space-y-4 ${
-                          editingJobId === b.id ? 'border-emerald-400' : 'border-slate-800'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <div className="text-xs font-bold text-emerald-400">
-                              {b.date} · {b.slot}
-                            </div>
-                            <h3 className="font-extrabold text-base text-white">
-                              {b.client?.name} · {b.carMakeModel}
-                            </h3>
-                            <p className="text-xs text-slate-400">
-                              {b.location?.street}, {b.location?.plz} {b.location?.city}
-                            </p>
-                          </div>
-                          <div className="text-right">
-                            <span className="text-[11px] text-slate-400 block">Чистий прибуток</span>
-                            <span
-                              className={`text-lg font-extrabold ${
-                                netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'
-                              }`}
-                            >
-                              {chf(netProfit)} CHF
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Mobile Inputs for Price & Km */}
-                        <div className="grid grid-cols-2 gap-3">
-                          <label className="space-y-1 text-xs">
-                            <span className="text-slate-400 font-semibold">Фінальна сума (CHF)</span>
-                            <input
-                              key={`${b.id}-price-${b.finalPrice ?? ''}`}
-                              defaultValue={b.finalPrice ?? ''}
-                              placeholder={String(curPrice)}
-                              inputMode="decimal"
-                              onBlur={(e) => {
-                                const v =
-                                  e.target.value.trim() === '' ? null : parseNum(e.target.value);
-                                if (v !== (b.finalPrice != null ? Number(b.finalPrice) : null)) {
-                                  saveJobField(b.id, { final_price: v });
-                                }
-                              }}
-                              className={inputCls}
-                            />
-                          </label>
-
-                          <div className="space-y-1 text-xs">
-                            <div className="flex items-center justify-between">
-                              <span className="text-slate-400 font-semibold">Км (туди-назад)</span>
-                              <button
-                                type="button"
-                                onClick={() => saveJobField(b.id, { km_driven: est })}
-                                className="text-[11px] text-emerald-400 font-bold underline"
-                              >
-                                Авто ({est} км)
-                              </button>
-                            </div>
-                            <input
-                              key={`${b.id}-km-${b.kmDriven ?? ''}`}
-                              defaultValue={b.kmDriven ?? ''}
-                              placeholder={`≈ ${est}`}
-                              inputMode="decimal"
-                              onBlur={(e) => {
-                                const v =
-                                  e.target.value.trim() === '' ? null : parseNum(e.target.value);
-                                if (v !== (b.kmDriven != null ? Number(b.kmDriven) : null)) {
-                                  saveJobField(b.id, { km_driven: v });
-                                }
-                              }}
-                              className={inputCls}
-                            />
-                          </div>
-                        </div>
-
-                        {/* 1-Tap Payment Method Chips */}
-                        <div className="space-y-1.5">
-                          <span className="text-xs text-slate-400 font-semibold block">
-                            Тип оплати (натисни для збереження):
-                          </span>
-                          <div className="flex flex-wrap gap-1.5">
-                            {PAYMENT_METHODS.map((pm) => (
-                              <button
-                                key={pm}
-                                type="button"
-                                onClick={() =>
-                                  saveJobField(b.id, {
-                                    payment_method: pm,
-                                    paid: true
-                                  })
-                                }
-                                className={`px-3 py-2 rounded-xl text-xs font-extrabold border transition ${
-                                  b.paymentMethod === pm
-                                    ? 'bg-emerald-500 text-slate-950 border-emerald-400'
-                                    : 'bg-slate-950 text-slate-300 border-slate-700'
-                                }`}
-                              >
-                                {pm}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* Paid Toggle + Internal Notes */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center pt-1">
-                          <button
-                            type="button"
-                            onClick={() => saveJobField(b.id, { paid: !b.paid })}
-                            className={`py-2.5 px-4 rounded-xl font-extrabold text-xs flex items-center justify-center gap-2 border transition ${
-                              b.paid
-                                ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
-                                : 'bg-slate-950 border-slate-700 text-amber-300'
-                            }`}
-                          >
-                            <CreditCard className="w-4 h-4" />
-                            <span>{b.paid ? '✓ Замовлення ОПЛАЧЕНО' : 'Позначити як оплачене'}</span>
-                          </button>
-
-                          <input
-                            key={`${b.id}-note-${b.internalNotes}`}
-                            defaultValue={b.internalNotes}
-                            placeholder="Нотатка (чайові, хімія, інше)..."
-                            onBlur={(e) => {
-                              if (e.target.value !== b.internalNotes) {
-                                saveJobField(b.id, { internal_notes: e.target.value || null });
-                              }
-                            }}
-                            className={inputCls}
-                          />
-                        </div>
-
-                        {/* Quick WhatsApp "Car is Ready" & Expense Link */}
-                        <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800 text-xs">
-                          <span className="text-slate-400">
-                            Дорога: <b>{chf(travelChf)} CHF</b> · Матеріали: <b>{chf(matChf)} CHF</b>
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => openWhatsAppComposer(b, 'done')}
-                            className="px-3 py-1.5 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-bold flex items-center gap-1"
-                          >
-                            <MessageCircle className="w-3.5 h-3.5" />
-                            <span>WA: Авто готове</span>
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })
-              )}
-            </div>
-          )}
-
-          {/* TAB 3: EXPENSES (FAST MOBILE LOGGER) */}
-          {androidTab === 'expenses' && (
-            <div className="space-y-4">
-              <form
-                onSubmit={addExpense}
-                className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3"
-              >
-                <h2 className="font-extrabold text-base flex items-center gap-2">
-                  <Receipt className="w-4 h-4 text-emerald-400" />
-                  <span>Швидке внесення витрати</span>
-                </h2>
-
-                <div className="grid grid-cols-2 gap-2.5 text-xs">
-                  <label className="space-y-1">
-                    <span className="text-slate-400">Сума (CHF) *</span>
-                    <input
-                      value={expForm.amount}
-                      onChange={(e) => setExpForm({ ...expForm, amount: e.target.value })}
-                      inputMode="decimal"
-                      placeholder="24.90"
-                      className={inputCls}
-                    />
-                  </label>
-                  <label className="space-y-1">
-                    <span className="text-slate-400">Дата</span>
-                    <input
-                      type="date"
-                      value={expForm.date}
-                      onChange={(e) => setExpForm({ ...expForm, date: e.target.value })}
-                      className={inputCls}
-                    />
-                  </label>
-                </div>
-
-                <div className="space-y-1 text-xs">
-                  <span className="text-slate-400">Категорія</span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {EXPENSE_CATEGORIES.map((cat) => (
-                      <button
-                        key={cat}
-                        type="button"
-                        onClick={() => setExpForm({ ...expForm, category: cat })}
-                        className={`px-3 py-1.5 rounded-xl font-bold border transition ${
-                          expForm.category === cat
-                            ? 'bg-white text-slate-950 border-white'
-                            : 'bg-slate-950 text-slate-400 border-slate-800'
-                        }`}
-                      >
-                        {cat}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-                  <label className="space-y-1">
-                    <span className="text-slate-400">Що куплено *</span>
-                    <input
-                      value={expForm.description}
-                      onChange={(e) => setExpForm({ ...expForm, description: e.target.value })}
-                      placeholder="Waterless-концентрат, мікрофібра..."
-                      className={inputCls}
-                    />
-                  </label>
-                  <label className="space-y-1">
-                    <span className="text-slate-400">Магазин / Постачальник</span>
-                    <input
-                      value={expForm.supplier}
-                      onChange={(e) => setExpForm({ ...expForm, supplier: e.target.value })}
-                      placeholder="Galaxus / Jumbo / Coop"
-                      className={inputCls}
-                    />
-                  </label>
-                </div>
-
-                <label className="space-y-1 text-xs block">
-                  <span className="text-slate-400">Прив'язати до конкретного авто (необов'язково)</span>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-slate-400">Км туди-назад</span>
+                  <input
+                    key={`${j.b.id}-km-${j.b.kmDriven ?? ''}`}
+                    defaultValue={j.b.kmDriven ?? ''}
+                    placeholder={`≈ ${estimateKm(j.b)}`}
+                    inputMode="decimal"
+                    onBlur={(e) => {
+                      const v = e.target.value.trim() === '' ? null : parseNum(e.target.value);
+                      if (v !== (j.b.kmDriven != null ? Number(j.b.kmDriven) : null)) saveJobField(j.b.id, { km_driven: v });
+                    }}
+                    className={inputCls}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-slate-400">Спосіб оплати</span>
                   <select
-                    value={expForm.bookingId}
-                    onChange={(e) => setExpForm({ ...expForm, bookingId: e.target.value })}
+                    value={j.b.paymentMethod}
+                    onChange={(e) => saveJobField(j.b.id, { payment_method: e.target.value || null })}
                     className={inputCls}
                   >
-                    <option value="">Загальна витрата бізнесу</option>
-                    {bookings
-                      .filter((b) => b.status === 'confirmed')
-                      .map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {jobLabel(b)}
-                        </option>
-                      ))}
+                    <option value="">—</option>
+                    {PAYMENT_METHODS.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
                   </select>
                 </label>
-
-                <button
-                  type="submit"
-                  className="w-full py-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-sm transition shadow-lg"
-                >
-                  + Зберегти витрату в базу
-                </button>
-              </form>
-
-              {/* Expense List */}
-              <div className="space-y-2">
-                <h3 className="font-bold text-sm text-slate-300 px-1">
-                  Історія витрат ({accounting.monthExpenses.length})
-                </h3>
-                {accounting.monthExpenses.length === 0 ? (
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-slate-400 text-xs">
-                    У вибраному періоді витрат ще немає.
-                  </div>
-                ) : (
-                  accounting.monthExpenses.map((e) => {
-                    const jb = bookings.find((x) => x.id === e.booking_id);
-                    return (
-                      <div
-                        key={e.id}
-                        className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 flex items-center justify-between gap-3"
-                      >
-                        <div className="min-w-0">
-                          <div className="font-bold text-sm text-white truncate">
-                            {e.description}
-                          </div>
-                          <div className="text-xs text-slate-400">
-                            {e.expense_date} · {e.category}
-                            {e.supplier ? ` · ${e.supplier}` : ''}
-                            {jb ? ` · 🚗 ${jb.carMakeModel}` : ''}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="font-extrabold text-sm text-amber-300">
-                            −{chf(e.amount_chf)} CHF
-                          </span>
-                          <button
-                            onClick={() => deleteExpense(e.id)}
-                            className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-red-400"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* TAB 4: FINANCE & ANALYTICS */}
-          {androidTab === 'finance' && (
-            <div className="space-y-4">
-              {/* Month Picker */}
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 flex items-center justify-between">
-                <button
-                  onClick={() => shiftMonth(-1)}
-                  className="p-2 rounded-xl bg-slate-800 text-white font-bold"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-                <div className="text-center">
-                  <span className="text-xs text-slate-400 block">Період звіту</span>
-                  <span className="font-extrabold text-sm capitalize">{monthLabel}</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => shiftMonth(1)}
-                    className="p-2 rounded-xl bg-slate-800 text-white font-bold"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() =>
-                      setAccMonth(accMonth === 'all' ? localDateStr().slice(0, 7) : 'all')
-                    }
-                    className="px-2.5 py-2 rounded-xl bg-slate-800 text-xs font-bold text-emerald-300"
-                  >
-                    {accMonth === 'all' ? 'Місяць' : 'Весь час'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Financial Summary Grid */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="col-span-2 bg-gradient-to-br from-emerald-950 to-slate-900 border border-emerald-500/40 rounded-2xl p-5">
-                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-300">
-                    Чистий прибуток (Netto)
-                  </span>
-                  <div className="text-3xl font-extrabold text-white mt-1">
-                    {chf(accounting.profit)} CHF
-                  </div>
-                  <div className="text-xs text-slate-300 mt-2 flex flex-wrap gap-3">
-                    <span>Виконано авто: <b>{accounting.jobs.length}</b></span>
-                    <span>Пробіг: <b>{Math.round(accounting.km)} км</b></span>
-                  </div>
-                </div>
-
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-                  <span className="text-xs text-slate-400 block">Загальна каса (Дохід)</span>
-                  <span className="text-xl font-extrabold text-white">
-                    {chf(accounting.revenue)} CHF
-                  </span>
-                </div>
-
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-                  <span className="text-xs text-slate-400 block">Очікує оплати</span>
-                  <span className="text-xl font-extrabold text-sky-400">
-                    {chf(accounting.unpaid)} CHF
-                  </span>
-                </div>
-
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-                  <span className="text-xs text-slate-400 block">Витрати на дорогу</span>
-                  <span className="text-lg font-extrabold text-amber-300">
-                    −{chf(accounting.travel)} CHF
-                  </span>
-                </div>
-
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-                  <span className="text-xs text-slate-400 block">Матеріали та інше</span>
-                  <span className="text-lg font-extrabold text-amber-300">
-                    −{chf(accounting.expensesTotal)} CHF
-                  </span>
-                </div>
-              </div>
-
-              {/* Cost Per Km & CSV Export */}
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-300 font-semibold">
-                    Вартість 1 км пробігу (пальне + амортизація CHF):
-                  </span>
+                <label className="space-y-1 md:col-span-2">
+                  <span className="text-slate-400">Нотатка</span>
                   <input
-                    key={`cpk-${costPerKm}`}
-                    defaultValue={costPerKm}
-                    inputMode="decimal"
-                    onBlur={(e) => saveCostPerKm(e.target.value)}
-                    className="w-20 bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-center font-bold text-sm text-white"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2.5 pt-2 border-t border-slate-800">
-                  <button
-                    onClick={exportJobsCsv}
-                    className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold flex items-center justify-center gap-1.5"
-                  >
-                    <Download className="w-4 h-4 text-emerald-400" />
-                    <span>Експорт замовлень (CSV)</span>
-                  </button>
-                  <button
-                    onClick={exportExpensesCsv}
-                    className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold flex items-center justify-center gap-1.5"
-                  >
-                    <Download className="w-4 h-4 text-sky-400" />
-                    <span>Експорт витрат (CSV)</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 5: ANDROID NOTIFICATIONS & PWA SETUP */}
-          {androidTab === 'settings' && (
-            <div className="space-y-4">
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-11 h-11 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center">
-                    <BellRing className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h3 className="font-extrabold text-base">Сповіщення про нові бронювання</h3>
-                    <p className="text-xs text-slate-400">
-                      Звуковий сигнал, вібрація та системні Android Push-нотифікації
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-950 border border-slate-800">
-                  <span className="text-xs font-bold">Системні Push-сповіщення Android</span>
-                  {notifPermission === 'granted' ? (
-                    <span className="text-xs font-extrabold text-emerald-400 flex items-center gap-1">
-                      <Check className="w-4 h-4" /> Активовано
-                    </span>
-                  ) : (
-                    <button
-                      onClick={requestAndroidNotificationPermission}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-500 text-slate-950 font-extrabold text-xs"
-                    >
-                      Увімкнути Push
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-950 border border-slate-800">
-                  <span className="text-xs font-bold">Звуковий сигнал при новій заявці</span>
-                  <button
-                    onClick={() => {
-                      const next = !soundEnabled;
-                      setSoundEnabled(next);
-                      if (next) playNotificationSound();
+                    key={`${j.b.id}-note-${j.b.internalNotes}`}
+                    defaultValue={j.b.internalNotes}
+                    placeholder="наприклад: чайові, знижка, проблема"
+                    onBlur={(e) => {
+                      if (e.target.value !== j.b.internalNotes) saveJobField(j.b.id, { internal_notes: e.target.value || null });
                     }}
-                    className={`px-3 py-1.5 rounded-lg font-extrabold text-xs ${
-                      soundEnabled
-                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                        : 'bg-slate-800 text-slate-400'
-                    }`}
-                  >
-                    {soundEnabled ? '🔊 Увімкнено' : '🔇 Вимкнено'}
-                  </button>
-                </div>
-
-                <button
-                  onClick={simulateIncomingBooking}
-                  className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-extrabold text-emerald-300 flex items-center justify-center gap-2"
-                >
-                  <Bell className="w-4 h-4" />
-                  <span>Протестувати надходження нового бронювання</span>
-                </button>
+                    className={inputCls}
+                  />
+                </label>
               </div>
-
-              {/* How to install on Android Home Screen */}
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
-                <div className="flex items-center gap-2.5 text-sky-400 font-extrabold text-sm">
-                  <Smartphone className="w-5 h-5" />
-                  <span>Як встановити як додаток на Android (за 10 секунд)</span>
-                </div>
-                <ol className="text-xs text-slate-300 space-y-2 list-decimal list-inside leading-relaxed">
-                  <li>
-                    Відкрий свій сайт на телефоні з параметром:{' '}
-                    <code className="bg-slate-950 px-2 py-0.5 rounded text-emerald-300">
-                      ?admin=1
-                    </code>
-                  </li>
-                  <li>
-                    У браузері <b>Google Chrome</b> на Android натисни меню <b>⋮ (три крапки)</b> у правому верхньому кутку.
-                  </li>
-                  <li>
-                    Вибери <b>«Додати на головний екран» (Install App / Установити додаток)</b>.
-                  </li>
-                  <li>
-                    На екрані телефону з'явиться іконка <b>ZüriGlanz</b> — вона відкривається на весь екран як рідний Android-додаток і тримає з'єднання із Supabase!
-                  </li>
-                </ol>
-              </div>
-
-              <button
-                onClick={async () => {
-                  if (session) await supabase.auth.signOut();
-                  setIsDemoAdmin(false);
-                  setIsAdminMode(false);
-                }}
-                className="w-full py-3.5 rounded-2xl bg-red-600/20 border border-red-500/40 text-red-300 font-extrabold text-xs flex items-center justify-center gap-2"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>Вийти з акаунту власника</span>
-              </button>
+              <label className="flex items-center gap-2 text-xs cursor-pointer w-fit">
+                <input
+                  type="checkbox"
+                  checked={j.b.paid}
+                  onChange={(e) => saveJobField(j.b.id, { paid: e.target.checked })}
+                  className="w-4 h-4 accent-emerald-500"
+                />
+                <span className={j.b.paid ? 'text-emerald-400 font-bold' : 'text-slate-300'}>
+                  {j.b.paid ? 'Оплачено' : 'Позначити як оплачене'}
+                </span>
+              </label>
             </div>
-          )}
-        </main>
+          ))
+        )}
+      </div>
 
-        {/* ANDROID BOTTOM NAVIGATION BAR */}
-        <nav className="fixed bottom-0 inset-x-0 z-40 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 px-2 py-1.5">
-          <div className="max-w-2xl mx-auto grid grid-cols-5 gap-1">
-            {[
-              { id: 'inbox', icon: Bell, label: 'Заявки', badge: pendingCount },
-              { id: 'jobs', icon: Wrench, label: 'Роботи' },
-              { id: 'expenses', icon: Receipt, label: 'Витрати' },
-              { id: 'finance', icon: TrendingUp, label: 'Каса' },
-              { id: 'settings', icon: Smartphone, label: 'Додаток' }
-            ].map((item) => {
-              const IconComp = item.icon;
-              const active = androidTab === item.id;
+      {/* Expenses */}
+      <div className="space-y-3">
+        <h3 className="font-bold text-lg">Витрати (матеріали та інше)</h3>
+        <p className="text-xs text-slate-400">
+          Пальне й амортизацію авто сюди не вносити: вони вже враховані через вартість 1 км. Якщо матеріал куплений під конкретне замовлення, вибери його у списку.
+        </p>
+        <form onSubmit={addExpense} className="bg-slate-800 border border-slate-700 rounded-xl p-4 grid grid-cols-2 md:grid-cols-6 gap-2 text-xs">
+          <label className="space-y-1">
+            <span className="text-slate-400">Дата</span>
+            <input type="date" value={expForm.date} onChange={(e) => setExpForm({ ...expForm, date: e.target.value })} className={inputCls} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-slate-400">Категорія</span>
+            <select value={expForm.category} onChange={(e) => setExpForm({ ...expForm, category: e.target.value })} className={inputCls}>
+              {EXPENSE_CATEGORIES.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1 md:col-span-2">
+            <span className="text-slate-400">Що куплено</span>
+            <input value={expForm.description} onChange={(e) => setExpForm({ ...expForm, description: e.target.value })} placeholder="наприклад: мікрофібра 10 шт., waterless-спрей 5 л" className={inputCls} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-slate-400">Де куплено</span>
+            <input value={expForm.supplier} onChange={(e) => setExpForm({ ...expForm, supplier: e.target.value })} placeholder="магазин / сайт" className={inputCls} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-slate-400">Сума, CHF</span>
+            <input value={expForm.amount} onChange={(e) => setExpForm({ ...expForm, amount: e.target.value })} inputMode="decimal" placeholder="0.00" className={inputCls} />
+          </label>
+          <label className="space-y-1 col-span-2 md:col-span-4">
+            <span className="text-slate-400">Прив'язати до замовлення (необов'язково)</span>
+            <select value={expForm.bookingId} onChange={(e) => setExpForm({ ...expForm, bookingId: e.target.value })} className={inputCls}>
+              <option value="">Загальна витрата</option>
+              {bookings
+                .filter((b) => b.status === 'confirmed')
+                .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+                .slice(0, 60)
+                .map((b) => (
+                  <option key={b.id} value={b.id}>{jobLabel(b)}</option>
+                ))}
+            </select>
+          </label>
+          <div className="col-span-2 flex items-end">
+            <button type="submit" className="w-full py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-extrabold text-sm transition">
+              Додати витрату
+            </button>
+          </div>
+        </form>
+
+        {Object.keys(accounting.byCategory).length > 0 && (
+          <div className="flex flex-wrap gap-2 text-xs">
+            {Object.entries(accounting.byCategory).map(([cat, sum]) => (
+              <span key={cat} className="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700">
+                {cat}: <b>{chf(sum)} CHF</b>
+              </span>
+            ))}
+          </div>
+        )}
+
+        {accounting.monthExpenses.length === 0 ? (
+          <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-6 text-center text-slate-400 text-sm">
+            У цьому періоді немає витрат.
+          </div>
+        ) : (
+          <div className="bg-slate-800 border border-slate-700 rounded-xl divide-y divide-slate-700">
+            {accounting.monthExpenses.map((e) => {
+              const jb = bookings.find((x) => x.id === e.booking_id);
               return (
-                <button
-                  key={item.id}
-                  onClick={() => setAndroidTab(item.id)}
-                  className={`relative py-2 rounded-xl flex flex-col items-center justify-center gap-1 transition ${
-                    active ? 'text-emerald-400 bg-slate-800/90' : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <IconComp className="w-5 h-5" />
-                  <span className="text-[10px] font-extrabold">{item.label}</span>
-                  {item.badge > 0 && (
-                    <span className="absolute top-1 right-3 min-w-[18px] h-[18px] px-1 rounded-full bg-[#D52B1E] text-white text-[10px] font-extrabold flex items-center justify-center">
-                      {item.badge}
-                    </span>
-                  )}
-                </button>
+                <div key={e.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm">
+                  <div className="min-w-0">
+                    <div className="font-semibold">
+                      {e.description}
+                      {e.supplier ? <span className="text-slate-400 font-normal"> · {e.supplier}</span> : null}
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      {e.expense_date} · {e.category}
+                      {jb ? ` · замовлення: ${jobLabel(jb)}` : ''}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="font-extrabold">{chf(e.amount_chf)} CHF</span>
+                    <button onClick={() => deleteExpense(e.id)} className="text-xs px-2.5 py-1.5 rounded-lg bg-slate-700 hover:bg-red-600 text-slate-300 hover:text-white transition">
+                      Видалити
+                    </button>
+                  </div>
+                </div>
               );
             })}
           </div>
-        </nav>
+        )}
       </div>
-    );
-  }
+    </div>
+  );
 
-  // =========================================================================
-  // PUBLIC CUSTOMER BOOKING WEBSITE (DE / EN)
-  // =========================================================================
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-red-600 selection:text-white">
-      {/* PIN / SUPABASE LOGIN MODAL FOR OWNER */}
+      {/* PIN LOGIN MODAL FOR OWNER */}
       {showPinModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-sm w-full p-6 border border-slate-200 shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-slate-900 font-bold">
-                <Smartphone className="w-5 h-5 text-[#D52B1E]" />
-                <span>ZüriGlanz · Android App Login</span>
+                <KeyRound className="w-5 h-5 text-[#D52B1E]" />
+                <span>ZüriGlanz · Owner Login</span>
               </div>
               <button
                 onClick={() => {
@@ -3068,7 +1664,7 @@ export default function App() {
               </button>
             </div>
             <p className="text-xs text-slate-600">
-              Вхід у мобільний кабінет власника (Supabase Auth):
+              Geschützter Inhaber-Bereich. Bitte anmelden:
             </p>
             <form onSubmit={handlePinLogin} className="space-y-3">
               <input
@@ -3077,7 +1673,7 @@ export default function App() {
                 autoComplete="username"
                 value={loginEmail}
                 onChange={(e) => setLoginEmail(e.target.value)}
-                placeholder="E-Mail власника"
+                placeholder="E-Mail"
                 className="w-full px-4 py-3 text-sm rounded-xl border border-slate-300 focus:outline-none focus:border-slate-900"
               />
               <input
@@ -3085,7 +1681,7 @@ export default function App() {
                 autoComplete="current-password"
                 value={pinInput}
                 onChange={(e) => setPinInput(e.target.value)}
-                placeholder="Пароль"
+                placeholder="Passwort"
                 className="w-full px-4 py-3 text-sm rounded-xl border border-slate-300 focus:outline-none focus:border-slate-900"
               />
               {pinError && <p className="text-xs text-red-600 font-semibold">{pinError}</p>}
@@ -3093,20 +1689,9 @@ export default function App() {
                 type="submit"
                 className="w-full py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm transition"
               >
-                Увійти в Android-кабінет
+                Login
               </button>
             </form>
-
-            <div className="pt-3 border-t border-slate-200">
-              <button
-                type="button"
-                onClick={enterDemoOwnerApp}
-                className="w-full py-2.5 px-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold text-xs flex items-center justify-center gap-1.5 transition"
-              >
-                <Smartphone className="w-4 h-4" />
-                <span>Відкрити Android-додаток (Прев’ю / Тест-режим)</span>
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -3148,9 +1733,301 @@ export default function App() {
                 </button>
               ))}
             </div>
+
+            {isAdminMode && (
+              <button
+                onClick={async () => {
+                  await supabase.auth.signOut();
+                  setIsAdminMode(false);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Logout</span>
+              </button>
+            )}
           </div>
         </div>
       </header>
+
+      {/* OWNER ADMIN PANEL */}
+      {isAdminMode && (
+        <section className="bg-slate-900 text-white border-b border-slate-800 py-8 px-4 sm:px-6">
+          <div className="max-w-6xl mx-auto space-y-6">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 text-emerald-400 text-xs font-semibold uppercase tracking-wider mb-1">
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>Захищений кабінет власника</span>
+                </div>
+                <h2 className="text-xl sm:text-2xl font-bold">{t.adminTitle}</h2>
+                <p className="text-sm text-slate-400">{t.adminSub}</p>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3 text-xs">
+                <div className="bg-slate-800 px-4 py-2.5 rounded-xl border border-slate-700">
+                  <span className="text-slate-400 block">Очікують (Pending)</span>
+                  <span className="text-xl font-extrabold text-amber-400">
+                    {bookings.filter((b) => b.status === 'pending').length}
+                  </span>
+                </div>
+                <div className="bg-slate-800 px-4 py-2.5 rounded-xl border border-slate-700">
+                  <span className="text-slate-400 block">Підтверджено</span>
+                  <span className="text-xl font-extrabold text-emerald-400">
+                    {bookings.filter((b) => b.status === 'confirmed').length}
+                  </span>
+                </div>
+                <div className="bg-slate-800 px-4 py-2.5 rounded-xl border border-slate-700">
+                  <span className="text-slate-400 block">Підтверджена каса</span>
+                  <span className="text-xl font-extrabold text-white">{confirmedRevenue} CHF</span>
+                </div>
+              </div>
+            </div>
+
+            {newBookingBanner && (
+              <div className="bg-emerald-500 text-slate-900 rounded-xl px-4 py-3 font-bold flex items-center justify-between gap-3">
+                <span>{newBookingBanner}</span>
+                <button onClick={() => setNewBookingBanner('')} className="text-sm underline shrink-0">
+                  OK
+                </button>
+              </div>
+            )}
+            {notifPermission === 'default' && (
+              <button
+                onClick={enableNotifications}
+                className="w-full sm:w-fit px-4 py-2.5 rounded-xl bg-slate-800 border border-emerald-500/50 text-emerald-300 text-sm font-bold hover:bg-slate-700 transition"
+              >
+                Увімкнути сповіщення про нові замовлення
+              </button>
+            )}
+            {notifPermission === 'denied' && (
+              <p className="text-xs text-amber-300">
+                Сповіщення заблоковані в налаштуваннях браузера. Дозволь їх для цього сайту (значок замка біля адреси), щоб бачити нові замовлення.
+              </p>
+            )}
+            <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded-xl border border-slate-700 w-fit">
+              {[
+                { id: 'bookings', label: 'Бронювання' },
+                { id: 'accounting', label: 'Облік і фінанси' }
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setAdminTab(tab.id)}
+                  className={`px-4 py-2 rounded-lg text-sm font-bold transition ${
+                    adminTab === tab.id ? 'bg-emerald-500 text-slate-900' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {adminTab === 'accounting' ? (
+              renderAccounting()
+            ) : (
+              <>
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800">
+              <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded-xl border border-slate-700">
+                {[
+                  { id: 'all', label: `Всі (${bookings.length})` },
+                  {
+                    id: 'pending',
+                    label: `Нові (${bookings.filter((b) => b.status === 'pending').length})`
+                  },
+                  {
+                    id: 'confirmed',
+                    label: `Підтверджені (${bookings.filter((b) => b.status === 'confirmed').length})`
+                  },
+                  {
+                    id: 'declined',
+                    label: `Відхилені (${bookings.filter((b) => b.status === 'declined').length})`
+                  }
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setAdminFilter(tab.id)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                      adminFilter === tab.id
+                        ? 'bg-white text-slate-900'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2 text-xs">
+                <button
+                  onClick={() => handleManualBlockSlot(selectedDate, '08:00 - 12:00')}
+                  className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 flex items-center gap-1.5 transition"
+                >
+                  <PlusCircle className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Заблокувати {selectedDate} (08–12)</span>
+                </button>
+                <button
+                  onClick={() => handleManualBlockSlot(selectedDate, '14:00 - 18:00')}
+                  className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 flex items-center gap-1.5 transition"
+                >
+                  <PlusCircle className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Заблокувати {selectedDate} (14–18)</span>
+                </button>
+              </div>
+            </div>
+
+            {filteredBookings.length === 0 ? (
+              <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-8 text-center text-slate-400">
+                {t.noBookings}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {filteredBookings.map((b) => (
+                  <div
+                    key={b.id}
+                    className="bg-slate-800 border border-slate-700 rounded-xl p-5 flex flex-col justify-between gap-4"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-3">
+                        <span
+                          className={`text-xs font-bold px-2.5 py-1 rounded-full ${
+                            b.status === 'confirmed'
+                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                              : b.status === 'declined'
+                              ? 'bg-red-500/20 text-red-300 border border-red-500/30'
+                              : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                          }`}
+                        >
+                          {b.status === 'confirmed'
+                            ? t.statusConfirmed
+                            : b.status === 'declined'
+                            ? t.statusDeclined
+                            : t.statusPending}
+                        </span>
+                        <span className="text-lg font-extrabold text-white">{b.totalPrice} CHF</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-sm mb-3 bg-slate-900/70 p-3 rounded-lg border border-slate-700/60">
+                        <div>
+                          <span className="text-xs text-slate-400 block">Дата & Слот</span>
+                          <span className="font-bold text-white">
+                            {b.date} · {b.slot}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-slate-400 block">Автомобіль</span>
+                          <span className="font-bold text-white">
+                            {b.carMakeModel} ({b.carYear})
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 text-xs text-slate-300">
+                        <div className="flex items-center justify-between gap-2 bg-slate-900/40 p-2 rounded-lg">
+                          <span>
+                            <strong className="text-slate-400">Adresse:</strong> {b.location?.street},{' '}
+                            {b.location?.plz} {b.location?.city}
+                            {b.location?.distKmFromBase != null && (
+                              <span className="ml-1.5 text-emerald-400 font-semibold">
+                                ({b.location.distKmFromBase} km ab Zürich)
+                              </span>
+                            )}
+                          </span>
+                          <a
+                            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                              `${b.location?.street}, ${b.location?.plz} ${b.location?.city}, Switzerland`
+                            )}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-sky-400 hover:text-sky-300 flex items-center gap-1 font-semibold shrink-0"
+                          >
+                            <MapPin className="w-3.5 h-3.5" />
+                            <span>Maps</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span>
+                            <strong className="text-slate-400">Клієнт:</strong> {b.client?.name} ·{' '}
+                            <a href={`tel:${b.client?.phone}`} className="text-emerald-400 underline">
+                              {b.client?.phone}
+                            </a>
+                          </span>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {[
+                              ['confirm', 'Підтвердження'],
+                              ['reminder', 'Нагадування'],
+                              ['decline', 'Відмова'],
+                              ['thanks', 'Подяка']
+                            ].map(([kind, label]) => (
+                              <a
+                                key={kind}
+                                href={buildWhatsAppLink(b, kind)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-600/30 font-semibold"
+                              >
+                                <MessageCircle className="w-3.5 h-3.5" />
+                                <span>WhatsApp: {label}</span>
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+
+                        <p>
+                          <strong className="text-slate-400">Додаткові опції:</strong>{' '}
+                          {b.addons?.length ? b.addons.join(', ') : 'Базовий пакет (150 CHF)'}
+                        </p>
+
+                        {b.client?.notes && (
+                          <div className="mt-2 p-2.5 rounded bg-slate-900 border border-slate-700 text-amber-200">
+                            <strong>Побажання клієнта:</strong> {b.client.notes}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-3 border-t border-slate-700">
+                      {b.status !== 'confirmed' && (
+                        <button
+                          onClick={() => {
+                            if (b.status === 'pending') window.open(buildWhatsAppLink(b, 'confirm'), '_blank');
+                            updateBookingStatus(b.id, 'confirmed');
+                          }}
+                          className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold py-2.5 px-3 rounded-lg flex items-center justify-center gap-1.5 transition"
+                        >
+                          <Check className="w-4 h-4" />
+                          {b.status === 'pending' ? 'Підтвердити + WhatsApp' : t.confirmBtn}
+                        </button>
+                      )}
+                      {b.status !== 'declined' && (
+                        <button
+                          onClick={() => {
+                            if (b.status === 'pending') window.open(buildWhatsAppLink(b, 'decline'), '_blank');
+                            updateBookingStatus(b.id, 'declined');
+                          }}
+                          className="flex-1 bg-amber-600/30 hover:bg-amber-600/50 text-amber-200 text-xs font-bold py-2.5 px-3 rounded-lg flex items-center justify-center gap-1.5 transition"
+                        >
+                          <X className="w-4 h-4" />
+                          {b.status === 'pending' ? 'Відмовити + WhatsApp' : t.declineBtn}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => deleteBooking(b.id)}
+                        className="bg-slate-700 hover:bg-red-600 text-slate-300 hover:text-white text-xs py-2.5 px-3 rounded-lg transition"
+                      >
+                        {t.deleteBtn}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+              </>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* HERO SECTION */}
       <section className="relative overflow-hidden bg-slate-900 text-white py-14 sm:py-20 px-4 sm:px-6 border-b border-slate-800">
@@ -3741,7 +2618,7 @@ export default function App() {
                               setTierManual(true);
                             }}
                             className={`p-3.5 rounded-xl border text-left transition flex flex-col justify-between ${
-                              tierConfirmed && bodyTier === tier.id
+                              (tierConfirmed && bodyTier === tier.id)
                                 ? 'border-slate-900 bg-slate-900 text-white'
                                 : 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
                             }`}
@@ -3750,7 +2627,7 @@ export default function App() {
                               <div className="font-bold text-sm">{t[tier.labelKey]}</div>
                               <div
                                 className={`text-[11px] mt-0.5 ${
-                                  tierConfirmed && bodyTier === tier.id ? 'text-slate-300' : 'text-slate-500'
+                                  (tierConfirmed && bodyTier === tier.id) ? 'text-slate-300' : 'text-slate-500'
                                 }`}
                               >
                                 {tier.example}
@@ -4245,18 +3122,19 @@ export default function App() {
             <button
               type="button"
               onClick={() => {
-                if (session || isDemoAdmin) {
-                  setIsAdminMode(true);
+                if (isAdminMode) {
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 } else {
                   setShowPinModal(true);
                 }
               }}
-              title="Android Owner App"
+              title="Owner Login"
               className="p-1.5 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition flex items-center gap-1"
             >
               <Lock className="w-3.5 h-3.5" />
-              {pendingCount > 0 && <span className="w-2 h-2 rounded-full bg-[#D52B1E]" />}
+              {bookings.filter((b) => b.status === 'pending').length > 0 && (
+                <span className="w-2 h-2 rounded-full bg-[#D52B1E]" />
+              )}
             </button>
           </div>
         </div>
