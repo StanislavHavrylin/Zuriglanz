@@ -529,6 +529,45 @@ const formatSwissPhone = (raw) => {
 
 const YEAR_OPTIONS = Array.from({ length: 2027 - 1970 + 1 }, (_, i) => String(2027 - i));
 
+// --- ACCOUNTING HELPERS ---
+const EXPENSE_CATEGORIES = [
+  'Матеріали',
+  'Інструмент і обладнання',
+  'Страхування',
+  'Маркетинг і сайт',
+  'Офіс і софт',
+  'Інше'
+];
+const PAYMENT_METHODS = ['Twint', 'Готівка', 'Рахунок / банк', 'Картка', 'Інше'];
+
+const localDateStr = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const parseNum = (v) => {
+  const n = parseFloat(String(v ?? '').replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+};
+const chf = (n) =>
+  (Math.round((Number(n) || 0) * 100) / 100).toLocaleString('de-CH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+const downloadCsv = (filename, rows) => {
+  const esc = (v) => {
+    const str = v == null ? '' : String(v);
+    return /[",;\n]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
+  };
+  const csv = '\uFEFF' + rows.map((r) => r.map(esc).join(';')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+};
+
 export default function App() {
   const [lang, setLang] = useState('de');
   const t = TRANSLATIONS[lang];
@@ -721,6 +760,11 @@ export default function App() {
     date: r.date,
     slot: r.slot,
     createdAt: new Date(r.created_at).getTime(),
+    kmDriven: r.km_driven ?? null,
+    finalPrice: r.final_price ?? null,
+    paid: !!r.paid,
+    paymentMethod: r.payment_method || '',
+    internalNotes: r.internal_notes || '',
     ...(r.details || {})
   });
   const loadBookings = async () => {
@@ -981,7 +1025,7 @@ export default function App() {
         bodyTier: 'compact',
         dirtLevel: 'normal',
         addons: [],
-        totalPrice: 150,
+        totalPrice: 0,
         location: { street: 'Manuelle Reservierung', plz: '8000', city: 'Zürich' },
         client: {
           name: 'Inhaber Blockierung',
@@ -1046,6 +1090,447 @@ export default function App() {
       .filter((b) => b.status === 'confirmed')
       .reduce((acc, item) => acc + (Number(item.totalPrice) || 0), 0);
   }, [bookings]);
+
+  // =====================  ACCOUNTING (owner only)  =====================
+  const [adminTab, setAdminTab] = useState('bookings');
+  const [expenses, setExpenses] = useState([]);
+  const [costPerKm, setCostPerKm] = useState(0.7);
+  const [accountingError, setAccountingError] = useState('');
+  const [accMonth, setAccMonth] = useState(localDateStr().slice(0, 7)); // 'YYYY-MM' or 'all'
+  const emptyExpense = () => ({
+    date: localDateStr(),
+    category: 'Матеріали',
+    description: '',
+    supplier: '',
+    amount: '',
+    bookingId: ''
+  });
+  const [expForm, setExpForm] = useState(emptyExpense());
+
+  const loadAccounting = async () => {
+    const [exp, set] = await Promise.all([
+      supabase.from('expenses').select('*').order('expense_date', { ascending: false }),
+      supabase.from('settings').select('cost_per_km').eq('id', 1).maybeSingle()
+    ]);
+    if (exp.error || set.error) {
+      console.error('Accounting load error:', exp.error || set.error);
+      setAccountingError(
+        'Таблиці обліку недоступні. Виконайте SQL-скрипт для обліку в Supabase (SQL Editor).'
+      );
+      return;
+    }
+    setAccountingError('');
+    setExpenses(exp.data || []);
+    if (set.data) setCostPerKm(Number(set.data.cost_per_km));
+  };
+  useEffect(() => {
+    if (session) loadAccounting();
+    else setExpenses([]);
+  }, [session]);
+
+  const estimateKm = (b) =>
+    Math.round(2 * Number(b.location?.distKmFromBase || 0) * 1.3 * 10) / 10;
+  const jobKm = (b) => (b.kmDriven != null ? Number(b.kmDriven) : estimateKm(b));
+  const jobPrice = (b) =>
+    b.finalPrice != null
+      ? Number(b.finalPrice)
+      : b.client?.name === 'Inhaber Blockierung'
+      ? 0
+      : Number(b.totalPrice) || 0;
+
+  const monthMatch = (dateStr) => accMonth === 'all' || (dateStr || '').startsWith(accMonth);
+
+  const accounting = useMemo(() => {
+    const linked = {};
+    expenses.forEach((e) => {
+      if (e.booking_id) linked[e.booking_id] = (linked[e.booking_id] || 0) + Number(e.amount_chf || 0);
+    });
+    const jobs = bookings
+      .filter((b) => b.status === 'confirmed' && monthMatch(b.date))
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+      .map((b) => {
+        const price = jobPrice(b);
+        const km = jobKm(b);
+        const travel = Math.round(km * costPerKm * 100) / 100;
+        const materials = linked[b.id] || 0;
+        return { b, price, km, travel, materials, profit: price - travel - materials };
+      });
+    const monthExpenses = expenses.filter((e) => monthMatch(e.expense_date));
+    const revenue = jobs.reduce((a, j) => a + j.price, 0);
+    const travel = jobs.reduce((a, j) => a + j.travel, 0);
+    const km = jobs.reduce((a, j) => a + j.km, 0);
+    const expensesTotal = monthExpenses.reduce((a, e) => a + Number(e.amount_chf || 0), 0);
+    const unpaid = jobs.filter((j) => !j.b.paid).reduce((a, j) => a + j.price, 0);
+    const byCategory = {};
+    monthExpenses.forEach((e) => {
+      byCategory[e.category] = (byCategory[e.category] || 0) + Number(e.amount_chf || 0);
+    });
+    return {
+      jobs,
+      monthExpenses,
+      revenue,
+      travel,
+      km,
+      expensesTotal,
+      unpaid,
+      byCategory,
+      profit: revenue - travel - expensesTotal
+    };
+  }, [bookings, expenses, costPerKm, accMonth]);
+
+  const shiftMonth = (delta) => {
+    const base = accMonth === 'all' ? localDateStr().slice(0, 7) : accMonth;
+    const [y, m] = base.split('-').map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    setAccMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  };
+  const monthLabel =
+    accMonth === 'all'
+      ? 'Весь період'
+      : new Date(Number(accMonth.slice(0, 4)), Number(accMonth.slice(5, 7)) - 1, 1).toLocaleDateString(
+          'uk-UA',
+          { month: 'long', year: 'numeric' }
+        );
+
+  const saveJobField = async (id, patch) => {
+    const { error } = await supabase.from('bookings').update(patch).eq('id', id);
+    if (error) {
+      console.error(error);
+      setAccountingError(
+        'Не вдалося зберегти: ' + error.message + ' (перевірте, чи виконано SQL для обліку)'
+      );
+    } else {
+      setAccountingError('');
+    }
+    loadBookings();
+  };
+
+  const addExpense = async (e) => {
+    e.preventDefault();
+    const amount = parseNum(expForm.amount);
+    if (!expForm.description.trim() || amount === null || amount < 0) {
+      setAccountingError('Заповніть опис і суму (число, наприклад 24.90).');
+      return;
+    }
+    const { error } = await supabase.from('expenses').insert({
+      expense_date: expForm.date,
+      category: expForm.category,
+      description: expForm.description.trim(),
+      supplier: expForm.supplier.trim() || null,
+      amount_chf: amount,
+      booking_id: expForm.bookingId || null
+    });
+    if (error) {
+      console.error(error);
+      setAccountingError('Не вдалося додати витрату: ' + error.message);
+      return;
+    }
+    setAccountingError('');
+    setExpForm({ ...emptyExpense(), date: expForm.date, category: expForm.category });
+    loadAccounting();
+  };
+
+  const deleteExpense = async (id) => {
+    if (!window.confirm('Видалити цю витрату?')) return;
+    const { error } = await supabase.from('expenses').delete().eq('id', id);
+    if (error) setAccountingError('Не вдалося видалити: ' + error.message);
+    loadAccounting();
+  };
+
+  const saveCostPerKm = async (value) => {
+    const n = parseNum(value);
+    if (n === null || n < 0 || n === costPerKm) return;
+    const { error } = await supabase.from('settings').update({ cost_per_km: n }).eq('id', 1);
+    if (error) setAccountingError('Не вдалося зберегти ставку: ' + error.message);
+    else setCostPerKm(n);
+  };
+
+  const jobLabel = (b) =>
+    `${b.date} · ${b.client?.name || '—'} · ${b.carMakeModel || ''}`.trim();
+
+  const exportJobsCsv = () =>
+    downloadCsv(`zuriglanz-zamovlennia-${accMonth}.csv`, [
+      ['Дата', 'Час', 'Клієнт', 'Телефон', 'Адреса', 'Авто', 'Ціна CHF', 'Км', 'Дорога CHF', 'Матеріали CHF', 'Прибуток CHF', 'Оплачено', 'Спосіб оплати', 'Нотатки'],
+      ...accounting.jobs.map((j) => [
+        j.b.date,
+        j.b.slot,
+        j.b.client?.name,
+        j.b.client?.phone,
+        `${j.b.location?.street || ''}, ${j.b.location?.plz || ''} ${j.b.location?.city || ''}`,
+        `${j.b.carMakeModel || ''} ${j.b.carYear || ''}`.trim(),
+        j.price.toFixed(2),
+        j.km,
+        j.travel.toFixed(2),
+        j.materials.toFixed(2),
+        j.profit.toFixed(2),
+        j.b.paid ? 'так' : 'ні',
+        j.b.paymentMethod,
+        j.b.internalNotes
+      ])
+    ]);
+  const exportExpensesCsv = () =>
+    downloadCsv(`zuriglanz-vytraty-${accMonth}.csv`, [
+      ['Дата', 'Категорія', 'Опис', 'Постачальник', 'Сума CHF', 'Замовлення'],
+      ...accounting.monthExpenses.map((e) => {
+        const jb = bookings.find((x) => x.id === e.booking_id);
+        return [e.expense_date, e.category, e.description, e.supplier, Number(e.amount_chf).toFixed(2), jb ? jobLabel(jb) : ''];
+      })
+    ]);
+
+  const inputCls =
+    'w-full bg-slate-900 border border-slate-600 rounded-lg px-2.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-400';
+
+  const renderAccounting = () => (
+    <div className="space-y-6">
+      {accountingError && (
+        <div className="bg-amber-500/10 border border-amber-500/40 text-amber-200 text-sm rounded-xl px-4 py-3">
+          {accountingError}
+        </div>
+      )}
+
+      {/* Period + settings + export */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <button onClick={() => shiftMonth(-1)} className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 text-sm font-bold">‹</button>
+          <div className="min-w-[10rem] text-center font-bold capitalize">{monthLabel}</div>
+          <button onClick={() => shiftMonth(1)} className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 text-sm font-bold">›</button>
+          <button
+            onClick={() => setAccMonth(accMonth === 'all' ? localDateStr().slice(0, 7) : 'all')}
+            className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 text-xs font-bold"
+          >
+            {accMonth === 'all' ? 'Поточний місяць' : 'Весь період'}
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <label className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5">
+            <span className="text-slate-400">Вартість 1 км (CHF)</span>
+            <input
+              key={`cpk-${costPerKm}`}
+              defaultValue={costPerKm}
+              inputMode="decimal"
+              onBlur={(e) => saveCostPerKm(e.target.value)}
+              className="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white text-center"
+            />
+          </label>
+          <button onClick={exportJobsCsv} className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700">CSV: замовлення</button>
+          <button onClick={exportExpensesCsv} className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700">CSV: витрати</button>
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 text-xs">
+        {[
+          { label: 'Дохід', value: `${chf(accounting.revenue)} CHF`, cls: 'text-white' },
+          { label: `Дорога (${Math.round(accounting.km)} км)`, value: `− ${chf(accounting.travel)} CHF`, cls: 'text-amber-300' },
+          { label: 'Матеріали й витрати', value: `− ${chf(accounting.expensesTotal)} CHF`, cls: 'text-amber-300' },
+          { label: 'Чистий прибуток', value: `${chf(accounting.profit)} CHF`, cls: accounting.profit >= 0 ? 'text-emerald-400' : 'text-red-400' },
+          { label: 'Замовлень', value: accounting.jobs.length, cls: 'text-white' },
+          { label: 'Ще не оплачено', value: `${chf(accounting.unpaid)} CHF`, cls: accounting.unpaid > 0 ? 'text-sky-300' : 'text-white' }
+        ].map((c) => (
+          <div key={c.label} className="bg-slate-800 px-4 py-3 rounded-xl border border-slate-700">
+            <span className="text-slate-400 block">{c.label}</span>
+            <span className={`text-lg font-extrabold ${c.cls}`}>{c.value}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Jobs */}
+      <div className="space-y-3">
+        <h3 className="font-bold text-lg">Підтверджені замовлення</h3>
+        <p className="text-xs text-slate-400">
+          Після роботи впиши фактичні км (туди-назад) і суму, що ти отримав. Якщо поле км порожнє, береться орієнтовне значення (сіре). Зміни зберігаються автоматично, коли виходиш з поля.
+        </p>
+        {accounting.jobs.length === 0 ? (
+          <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-6 text-center text-slate-400 text-sm">
+            У цьому періоді немає підтверджених замовлень.
+          </div>
+        ) : (
+          accounting.jobs.map((j) => (
+            <div key={j.b.id} className="bg-slate-800 border border-slate-700 rounded-xl p-4 space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div className="font-bold">
+                    {j.b.date} · {j.b.slot} · {j.b.client?.name || '—'}
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    {j.b.carMakeModel} {j.b.carYear ? `(${j.b.carYear})` : ''} · {j.b.location?.street}, {j.b.location?.plz} {j.b.location?.city}
+                  </div>
+                </div>
+                <div className="text-right text-xs">
+                  <div className="text-slate-400">
+                    Дорога {chf(j.travel)} · Матеріали {chf(j.materials)}
+                  </div>
+                  <div className={`text-base font-extrabold ${j.profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    Прибуток {chf(j.profit)} CHF
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+                <label className="space-y-1">
+                  <span className="text-slate-400">Сума, CHF</span>
+                  <input
+                    key={`${j.b.id}-price-${j.b.finalPrice ?? ''}`}
+                    defaultValue={j.b.finalPrice ?? ''}
+                    placeholder={String(j.price)}
+                    inputMode="decimal"
+                    onBlur={(e) => {
+                      const v = e.target.value.trim() === '' ? null : parseNum(e.target.value);
+                      if (v !== (j.b.finalPrice != null ? Number(j.b.finalPrice) : null)) saveJobField(j.b.id, { final_price: v });
+                    }}
+                    className={inputCls}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-slate-400">Км туди-назад</span>
+                  <input
+                    key={`${j.b.id}-km-${j.b.kmDriven ?? ''}`}
+                    defaultValue={j.b.kmDriven ?? ''}
+                    placeholder={`≈ ${estimateKm(j.b)}`}
+                    inputMode="decimal"
+                    onBlur={(e) => {
+                      const v = e.target.value.trim() === '' ? null : parseNum(e.target.value);
+                      if (v !== (j.b.kmDriven != null ? Number(j.b.kmDriven) : null)) saveJobField(j.b.id, { km_driven: v });
+                    }}
+                    className={inputCls}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-slate-400">Спосіб оплати</span>
+                  <select
+                    value={j.b.paymentMethod}
+                    onChange={(e) => saveJobField(j.b.id, { payment_method: e.target.value || null })}
+                    className={inputCls}
+                  >
+                    <option value="">—</option>
+                    {PAYMENT_METHODS.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="space-y-1 md:col-span-2">
+                  <span className="text-slate-400">Нотатка</span>
+                  <input
+                    key={`${j.b.id}-note-${j.b.internalNotes}`}
+                    defaultValue={j.b.internalNotes}
+                    placeholder="наприклад: чайові, знижка, проблема"
+                    onBlur={(e) => {
+                      if (e.target.value !== j.b.internalNotes) saveJobField(j.b.id, { internal_notes: e.target.value || null });
+                    }}
+                    className={inputCls}
+                  />
+                </label>
+              </div>
+              <label className="flex items-center gap-2 text-xs cursor-pointer w-fit">
+                <input
+                  type="checkbox"
+                  checked={j.b.paid}
+                  onChange={(e) => saveJobField(j.b.id, { paid: e.target.checked })}
+                  className="w-4 h-4 accent-emerald-500"
+                />
+                <span className={j.b.paid ? 'text-emerald-400 font-bold' : 'text-slate-300'}>
+                  {j.b.paid ? 'Оплачено' : 'Позначити як оплачене'}
+                </span>
+              </label>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Expenses */}
+      <div className="space-y-3">
+        <h3 className="font-bold text-lg">Витрати (матеріали та інше)</h3>
+        <p className="text-xs text-slate-400">
+          Пальне й амортизацію авто сюди не вносити: вони вже враховані через вартість 1 км. Якщо матеріал куплений під конкретне замовлення, вибери його у списку.
+        </p>
+        <form onSubmit={addExpense} className="bg-slate-800 border border-slate-700 rounded-xl p-4 grid grid-cols-2 md:grid-cols-6 gap-2 text-xs">
+          <label className="space-y-1">
+            <span className="text-slate-400">Дата</span>
+            <input type="date" value={expForm.date} onChange={(e) => setExpForm({ ...expForm, date: e.target.value })} className={inputCls} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-slate-400">Категорія</span>
+            <select value={expForm.category} onChange={(e) => setExpForm({ ...expForm, category: e.target.value })} className={inputCls}>
+              {EXPENSE_CATEGORIES.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1 md:col-span-2">
+            <span className="text-slate-400">Що куплено</span>
+            <input value={expForm.description} onChange={(e) => setExpForm({ ...expForm, description: e.target.value })} placeholder="наприклад: мікрофібра 10 шт., waterless-спрей 5 л" className={inputCls} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-slate-400">Де куплено</span>
+            <input value={expForm.supplier} onChange={(e) => setExpForm({ ...expForm, supplier: e.target.value })} placeholder="магазин / сайт" className={inputCls} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-slate-400">Сума, CHF</span>
+            <input value={expForm.amount} onChange={(e) => setExpForm({ ...expForm, amount: e.target.value })} inputMode="decimal" placeholder="0.00" className={inputCls} />
+          </label>
+          <label className="space-y-1 col-span-2 md:col-span-4">
+            <span className="text-slate-400">Прив'язати до замовлення (необов'язково)</span>
+            <select value={expForm.bookingId} onChange={(e) => setExpForm({ ...expForm, bookingId: e.target.value })} className={inputCls}>
+              <option value="">Загальна витрата</option>
+              {bookings
+                .filter((b) => b.status === 'confirmed')
+                .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+                .slice(0, 60)
+                .map((b) => (
+                  <option key={b.id} value={b.id}>{jobLabel(b)}</option>
+                ))}
+            </select>
+          </label>
+          <div className="col-span-2 flex items-end">
+            <button type="submit" className="w-full py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-extrabold text-sm transition">
+              Додати витрату
+            </button>
+          </div>
+        </form>
+
+        {Object.keys(accounting.byCategory).length > 0 && (
+          <div className="flex flex-wrap gap-2 text-xs">
+            {Object.entries(accounting.byCategory).map(([cat, sum]) => (
+              <span key={cat} className="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700">
+                {cat}: <b>{chf(sum)} CHF</b>
+              </span>
+            ))}
+          </div>
+        )}
+
+        {accounting.monthExpenses.length === 0 ? (
+          <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-6 text-center text-slate-400 text-sm">
+            У цьому періоді немає витрат.
+          </div>
+        ) : (
+          <div className="bg-slate-800 border border-slate-700 rounded-xl divide-y divide-slate-700">
+            {accounting.monthExpenses.map((e) => {
+              const jb = bookings.find((x) => x.id === e.booking_id);
+              return (
+                <div key={e.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm">
+                  <div className="min-w-0">
+                    <div className="font-semibold">
+                      {e.description}
+                      {e.supplier ? <span className="text-slate-400 font-normal"> · {e.supplier}</span> : null}
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      {e.expense_date} · {e.category}
+                      {jb ? ` · замовлення: ${jobLabel(jb)}` : ''}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="font-extrabold">{chf(e.amount_chf)} CHF</span>
+                    <button onClick={() => deleteExpense(e.id)} className="text-xs px-2.5 py-1.5 rounded-lg bg-slate-700 hover:bg-red-600 text-slate-300 hover:text-white transition">
+                      Видалити
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-red-600 selection:text-white">
@@ -1189,6 +1674,27 @@ export default function App() {
               </div>
             </div>
 
+            <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded-xl border border-slate-700 w-fit">
+              {[
+                { id: 'bookings', label: 'Бронювання' },
+                { id: 'accounting', label: 'Облік і фінанси' }
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setAdminTab(tab.id)}
+                  className={`px-4 py-2 rounded-lg text-sm font-bold transition ${
+                    adminTab === tab.id ? 'bg-emerald-500 text-slate-900' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {adminTab === 'accounting' ? (
+              renderAccounting()
+            ) : (
+              <>
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800">
               <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded-xl border border-slate-700">
                 {[
@@ -1369,6 +1875,8 @@ export default function App() {
                   </div>
                 ))}
               </div>
+            )}
+              </>
             )}
           </div>
         </section>
